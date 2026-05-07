@@ -41,7 +41,7 @@ struct SummaryResponse {
     daily: Vec<serde_json::Value>,
 }
 
-pub async fn serve(db_path: PathBuf, home: PathBuf, port: u16) -> anyhow::Result<()> {
+pub async fn serve(db_path: PathBuf, home: PathBuf, start_port: u16) -> anyhow::Result<()> {
     let cc_db = home.join(".cc-switch").join("cc-switch.db");
     let pricing = Arc::new(PricingEngine::new(
         if cc_db.exists() { cc_db.to_str() } else { None },
@@ -67,11 +67,37 @@ pub async fn serve(db_path: PathBuf, home: PathBuf, port: u16) -> anyhow::Result
         .layer(CorsLayer::permissive())
         .with_state(state);
 
-    let addr = format!("127.0.0.1:{}", port);
-    println!("Web dashboard: http://{}", addr);
-    let listener = tokio::net::TcpListener::bind(&addr).await?;
+    // Try ports from start_port upwards
+    let listener = bind_port(start_port).await?;
+    let actual_port = listener.local_addr()?.port();
+    let url = format!("http://127.0.0.1:{}", actual_port);
+    println!();
+    println!("  UsageMonitor Dashboard");
+    println!("  ─────────────────────");
+    println!("  Local:   {}", url);
+    println!("  Press Ctrl+C to stop");
+    println!();
+
+    // Auto-open browser
+    let url_clone = url.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        let _ = open::that(&url_clone);
+    });
+
     axum::serve(listener, app).await?;
     Ok(())
+}
+
+async fn bind_port(start: u16) -> anyhow::Result<tokio::net::TcpListener> {
+    for port in start..start + 10 {
+        let addr = format!("127.0.0.1:{}", port);
+        match tokio::net::TcpListener::bind(&addr).await {
+            Ok(l) => return Ok(l),
+            Err(_) => continue,
+        }
+    }
+    Err(anyhow::anyhow!("Could not bind to any port in range {}-{}", start, start + 10))
 }
 
 async fn index_page() -> Html<&'static str> {
