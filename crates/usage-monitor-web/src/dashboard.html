@@ -160,23 +160,47 @@ async function load(){
   }catch(e){document.getElementById('status').textContent='Error: '+e.message}
 }
 
+// ── Animated counter ──
+function animateValue(el,start,end,duration,formatter){
+  if(start===end){el.textContent=formatter(end);return}
+  const range=end-start;const startTime=performance.now();
+  function step(ts){
+    const elapsed=ts-startTime;const progress=Math.min(elapsed/duration,1);
+    const eased=1-Math.pow(1-progress,3); // ease-out
+    el.textContent=formatter(Math.round(start+range*eased));
+    if(progress<1)requestAnimationFrame(step);
+  }
+  requestAnimationFrame(step);
+}
+
 // ── Stats cards ──
+let prevStats=null;
 function renderStats(sum,mods){
   let inp=0,out=0,cr=0,cw=0,cost=0;
   mods.forEach(m=>{inp+=m.input;out+=m.output;cr+=m.cache_read;cw+=m.cache_write||0;cost+=m.estimated_cost||0});
   const total=inp+out+cw;
   const chr=inp+cr>0?cr/(inp+cr):0;
   const cards=[
-    {l:'Total Cost',v:fmtUSD(cost),cls:'hl',s:'estimated'},
-    {l:'Total Tokens',v:fmt(total),s:'input+output+cache write'},
-    {l:'Cache Hit Rate',v:fmtPct(chr),cls:'ac',s:'cache_read / total'},
-    {l:'Input',v:fmt(inp),s:''},
-    {l:'Output',v:fmt(out),s:''},
-    {l:'Cache Read',v:fmt(cr),cls:'hl',s:'tokens saved'},
-    {l:'Models',v:mods.length,s:`${sum.tool_count} tools`},
-    {l:'Messages',v:fmt(sum.message_count),s:'total requests'},
+    {l:'Total Cost',v:cost,cls:'hl',s:'estimated',fmt:v=>fmtUSD(v)},
+    {l:'Total Tokens',v:total,s:'input+output+cache write',fmt:v=>fmt(v)},
+    {l:'Cache Hit Rate',v:chr,cls:'ac',s:'cache_read / total',fmt:v=>fmtPct(v)},
+    {l:'Input',v:inp,s:'',fmt:v=>fmt(v)},
+    {l:'Output',v:out,s:'',fmt:v=>fmt(v)},
+    {l:'Cache Read',v:cr,cls:'hl',s:'tokens saved',fmt:v=>fmt(v)},
+    {l:'Models',v:mods.length,s:`${sum.tool_count} tools`,fmt:v=>String(v)},
+    {l:'Messages',v:sum.message_count,s:'total requests',fmt:v=>fmt(v)},
   ];
-  document.getElementById('stats').innerHTML=cards.map((c,i)=>`<div class="stat fade ${c.cls||''}"><div class="l">${c.l}</div><div class="v count-in">${c.v}</div><div class="s">${c.s}</div></div>`).join('');
+  const isFirst=!prevStats;
+  document.getElementById('stats').innerHTML=cards.map((c,i)=>{
+    const prev=isFirst?0:(prevStats[i]||c.v);
+    const id='stat-'+i;
+    setTimeout(()=>{
+      const el=document.getElementById(id);
+      if(el)animateValue(el,prev,c.v,600,c.fmt);
+    },i*40);
+    return `<div class="stat fade ${c.cls||''}"><div class="l">${c.l}</div><div class="v count-in" id="${id}">${c.fmt(isFirst?c.v:prev)}</div><div class="s">${c.s}</div></div>`;
+  }).join('');
+  prevStats=cards.map(c=>c.v);
 }
 
 // ── Chart ──
@@ -278,6 +302,20 @@ function renderHeatmap(data){
     }
   }
   ctx.textAlign='start';
+  // hover tooltip
+  const cells=[],ttip=document.getElementById('ttip');
+  for(let c=0;c<COLS;c++)for(let r=0;r<ROWS;r++){
+    cells.push({x:LM+c*(CELL+GAP),y:TM+r*(CELL+GAP),v:grid[c][r],
+      date:new Date(startDay.getTime()+((c*7+r)*86400000)).toISOString().slice(0,10)});
+  }
+  canvas.onmousemove=e=>{
+    const rect=canvas.getBoundingClientRect();
+    const mx=(e.clientX-rect.left)*(W/rect.width),my=(e.clientY-rect.top)*(H/rect.height);
+    const cell=cells.find(c=>mx>=c.x&&mx<c.x+CELL&&my>=c.y&&my<c.y+CELL);
+    if(cell&&cell.v>0){ttip.style.display='block';ttip.style.left=e.clientX+12+'px';ttip.style.top=e.clientY-30+'px';ttip.innerHTML='<strong>'+cell.date+'</strong><br>'+fmt(cell.v)+' tokens';}
+    else ttip.style.display='none';
+  };
+  canvas.onmouseleave=()=>{ttip.style.display='none'};
 }
 
 // ── Models table ──
