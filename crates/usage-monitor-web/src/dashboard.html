@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>UsageMonitor</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4"></script>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:system-ui,-apple-system,sans-serif;background:#0f1117;color:#e4e4e7;min-height:100vh}
+.header{background:#1a1c24;border-bottom:1px solid #2a2d37;padding:12px 24px;display:flex;align-items:center;justify-content:space-between}
+.header h1{font-size:18px;font-weight:600}
+.header button{background:#2563eb;color:#fff;border:none;padding:6px 16px;border-radius:6px;cursor:pointer;font-size:13px}
+.header button:hover{background:#1d4ed8}
+.grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;padding:20px 24px}
+.card{background:#1a1c24;border:1px solid #2a2d37;border-radius:8px;padding:16px}
+.card .label{font-size:11px;color:#9ca3af;text-transform:uppercase;letter-spacing:.5px}
+.card .value{font-size:28px;font-weight:700;margin-top:4px}
+.card .sub{font-size:12px;color:#6b7280;margin-top:2px}
+.charts{display:grid;grid-template-columns:2fr 1fr;gap:12px;padding:0 24px 20px}
+.chart-card{background:#1a1c24;border:1px solid #2a2d37;border-radius:8px;padding:16px}
+.chart-card h3{font-size:13px;font-weight:600;margin-bottom:12px;color:#9ca3af;text-transform:uppercase;letter-spacing:.5px}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th{text-align:left;padding:8px 12px;border-bottom:1px solid #2a2d37;color:#9ca3af;font-weight:500;font-size:11px}
+td{padding:8px 12px;border-bottom:1px solid #1f2129}
+tr:hover{background:#1f2129}
+.num{text-align:right;font-variant-numeric:tabular-nums}
+.loading{text-align:center;padding:40px;color:#6b7280}
+</style>
+</head>
+<body>
+<div class="header">
+<h1>📊 UsageMonitor</h1>
+<div>
+<span id="status" style="color:#6b7280;font-size:12px;margin-right:12px">Ready</span>
+<button onclick="doScan()">Scan Now</button>
+</div>
+</div>
+<div class="grid">
+<div class="card"><div class="label">Total Input</div><div class="value" id="inp">-</div><div class="sub">tokens</div></div>
+<div class="card"><div class="label">Total Output</div><div class="value" id="out">-</div><div class="sub">tokens</div></div>
+<div class="card"><div class="label">Cache Hit Rate</div><div class="value" id="chr">-</div><div class="sub">cache_read / total</div></div>
+<div class="card"><div class="label">Messages</div><div class="value" id="msg">-</div><div class="sub" id="tools"></div></div>
+</div>
+<div class="charts">
+<div class="chart-card"><h3>Daily Token Usage (Last 30 days)</h3><canvas id="dailyChart"></canvas></div>
+<div class="chart-card"><h3>Models</h3><div id="modelsTable"></div></div>
+</div>
+<div style="padding:0 24px 20px">
+<div class="chart-card"><h3>Recent Sessions</h3><div id="sessionsTable"></div></div>
+</div>
+
+<script>
+const fmt = n => {if(n>=1e9)return (n/1e9).toFixed(1)+'B';if(n>=1e6)return (n/1e6).toFixed(1)+'M';if(n>=1e3)return (n/1e3).toFixed(0)+'K';return n};
+const fmtPct = n => (n*100).toFixed(1)+'%';
+
+let dailyChart;
+
+async function load() {
+  try {
+    const r = await fetch('/api/summary');
+    const d = await r.json();
+    document.getElementById('inp').textContent = fmt(d.total_input);
+    document.getElementById('out').textContent = fmt(d.total_output);
+    document.getElementById('chr').textContent = fmtPct(d.cache_hit_rate);
+    document.getElementById('msg').textContent = fmt(d.message_count);
+    document.getElementById('tools').textContent = `${d.tool_count} tools`;
+    renderDaily(d.daily);
+    renderModels(d.models);
+  } catch(e) {
+    document.getElementById('status').textContent = 'Error loading';
+  }
+
+  try {
+    const r = await fetch('/api/sessions');
+    const sessions = await r.json();
+    renderSessions(sessions);
+  } catch(e) {}
+}
+
+function renderDaily(daily) {
+  const ctx = document.getElementById('dailyChart').getContext('2d');
+  const data = daily.slice(-30);
+  if (dailyChart) dailyChart.destroy();
+  dailyChart = new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels: data.map(d=>d.date),
+      datasets: [
+        {label:'Input',data:data.map(d=>d.input),backgroundColor:'#3b82f6',borderRadius:2},
+        {label:'Output',data:data.map(d=>d.output),backgroundColor:'#8b5cf6',borderRadius:2},
+        {label:'Cache Read',data:data.map(d=>d.cache_read),backgroundColor:'#22c55e',borderRadius:2},
+      ]
+    },
+    options: {
+      responsive:true,
+      maintainAspectRatio:false,
+      plugins:{legend:{labels:{color:'#9ca3af',font:{size:11}}}},
+      scales:{
+        x:{ticks:{color:'#6b7280',font:{size:10}},grid:{color:'#1f2129'}},
+        y:{ticks:{color:'#6b7280',font:{size:10},callback:v=>fmt(v)},grid:{color:'#1f2129'}}
+      }
+    }
+  });
+}
+
+function renderModels(models) {
+  const top = models.slice(0,15);
+  document.getElementById('modelsTable').innerHTML = `
+    <table>
+    <tr><th>Model</th><th class="num">Input</th><th class="num">Output</th><th class="num">Cache Read</th><th class="num">Sessions</th></tr>
+    ${top.map(m=>`<tr><td>${m.model_id}</td><td class="num">${fmt(m.input)}</td><td class="num">${fmt(m.output)}</td><td class="num">${fmt(m.cache_read)}</td><td class="num">${m.sessions}</td></tr>`).join('')}
+    </table>`;
+}
+
+function renderSessions(sessions) {
+  const top = sessions.slice(0,20);
+  document.getElementById('sessionsTable').innerHTML = `
+    <table>
+    <tr><th>Session</th><th>Client</th><th>Model</th><th class="num">Input</th><th class="num">Output</th><th class="num">Cache</th><th class="num">Msgs</th></tr>
+    ${top.map(s=>`<tr><td style="font-family:monospace;font-size:11px">${s.session_id.slice(0,8)}...</td><td>${s.client}</td><td>${s.model_id}</td><td class="num">${fmt(s.input)}</td><td class="num">${fmt(s.output)}</td><td class="num">${fmt(s.cache_read)}</td><td class="num">${s.messages}</td></tr>`).join('')}
+    </table>`;
+}
+
+async function doScan() {
+  document.getElementById('status').textContent = 'Scanning...';
+  try {
+    const r = await fetch('/api/scan', {method:'POST'});
+    const d = await r.json();
+    document.getElementById('status').textContent = `Scanned ${d.total} msgs (${d.inserted} new)`;
+    setTimeout(load, 500);
+  } catch(e) {
+    document.getElementById('status').textContent = 'Scan failed';
+  }
+}
+
+load();
+</script>
+</body>
+</html>

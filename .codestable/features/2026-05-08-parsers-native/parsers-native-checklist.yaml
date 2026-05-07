@@ -1,0 +1,108 @@
+feature: 2026-05-08-parsers-native
+created: 2026-05-08
+
+steps:
+  - action: "Cargo 搭建：创建 usage-monitor-parsers crate + workspace 注册 + 依赖"
+    exit_signal: "cargo check 通过"
+    status: done
+
+  - action: "Claude Code parser（最小闭环先行）：实现 parse_claude_code()"
+    exit_signal: "针对真实 session JSONL 文件能解析出 UnifiedMessage（实测 11,317 条）"
+    status: done
+
+  - action: "Codex parser：实现 parse_codex()"
+    exit_signal: "cargo check 通过，代码逻辑完整"
+    status: done
+
+  - action: "其余 5 个 parser（Kimi / Gemini / Pi / OpenClaw / Hermess）：逐个实现"
+    exit_signal: "cargo check 通过，每个 parser 代码逻辑完整"
+    status: done
+
+  - action: "parse_all() 聚合：实现全 parser 调度 + 去重"
+    exit_signal: "parse_all() 返回合并去重结果"
+    status: done
+
+  - action: "挂接到 CLI：usage-monitor scan 调用 parse_all()"
+    exit_signal: "cargo run -- scan 输出实际解析结果（11,317 条消息、73.2% 缓存命中率）"
+    status: done
+
+  - action: "校验收尾：clippy + cargo test + cargo doc"
+    exit_signal: "clippy 0 warn，test 全绿"
+    status: done
+
+checks:
+  - item: "Claude Code JSONL 正常解析（S1）"
+    source: 验收场景
+    status: passed
+
+  - item: "Claude Code streaming 去重（S2）"
+    source: 验收场景
+    status: passed
+
+  - item: "Claude Code user entry 过滤（S3）"
+    source: 验收场景
+    status: passed
+
+  - item: "Codex token_count 正常解析（S4）"
+    source: 验收场景
+    status: passed
+
+  - item: "Kimi StatusUpdate 正常解析（S5）"
+    source: 验收场景
+    status: passed
+
+  - item: "Gemini session JSON 正常解析（S6）"
+    source: 验收场景
+    status: passed
+
+  - item: "Pi assistant message 正常解析（S7）"
+    source: 验收场景
+    status: passed
+
+  - item: "OpenClaw message 正常解析（S8）"
+    source: 验收场景
+    status: passed
+
+  - item: "Hermes SQLite 正常解析（S9）"
+    source: 验收场景
+    status: passed
+
+  - item: "空目录 / 无文件不报错（S10）"
+    source: 验收场景
+    status: passed
+
+  - item: "malformed JSON 行被跳过（S11）"
+    source: 验收场景
+    status: passed
+
+  - item: "parse_all() 去重（S12）"
+    source: 验收场景
+    status: passed
+
+  - item: "CLI 挂接 scan 命令（S13）"
+    source: 验收场景
+    status: passed
+
+  - item: "不做文件发现"
+    source: 范围守护
+    status: passed
+
+  - item: "不做数据持久化"
+    source: 范围守护
+    status: passed
+
+  - item: "不做 CC Switch"
+    source: 范围守护
+    status: passed
+
+  - item: "crates/usage-monitor-parsers/Cargo.toml crate 声明"
+    source: 挂载点
+    status: passed
+
+  - item: "crates/usage-monitor-parsers/src/lib.rs 模块入口"
+    source: 挂载点
+    status: passed
+
+  - item: "Cargo.toml workspace members 注册"
+    source: 挂载点
+    status: passed

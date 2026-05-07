@@ -1,0 +1,15 @@
+[package]
+name = "usage-monitor-parsers"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "UsageMonitor native session file parsers for 7 AI coding tools"
+
+[dependencies]
+usage-monitor-core = { path = "../usage-monitor-core" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+rusqlite = { version = "0.31", features = ["bundled"] }
+chrono = "0.4"
+walkdir = "2"

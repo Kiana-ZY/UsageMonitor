@@ -1,0 +1,14 @@
+[package]
+name = "usage-monitor-tui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "UsageMonitor terminal UI — ratatui-based dashboard"
+
+[dependencies]
+usage-monitor-core = { path = "../usage-monitor-core" }
+usage-monitor-storage = { path = "../usage-monitor-storage" }
+usage-monitor-pricing = { path = "../usage-monitor-pricing" }
+ratatui = "0.28"
+crossterm = "0.28"
+anyhow = "1"

@@ -1,0 +1,11 @@
+[package]
+name = "usage-monitor-cc-switch"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "UsageMonitor CC Switch SQLite adapter — reads proxy_request_logs as UnifiedMessage"
+
+[dependencies]
+usage-monitor-core = { path = "../usage-monitor-core" }
+rusqlite = { version = "0.31", features = ["bundled"] }
+thiserror = "2"

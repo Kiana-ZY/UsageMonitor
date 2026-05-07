@@ -1,0 +1,11 @@
+[package]
+name = "usage-monitor-storage"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "UsageMonitor SQLite storage layer"
+
+[dependencies]
+usage-monitor-core = { path = "../usage-monitor-core" }
+rusqlite = { version = "0.31", features = ["bundled"] }
+thiserror = "2"

@@ -1,0 +1,33 @@
+[workspace]
+members = ["crates/usage-monitor-core", "crates/usage-monitor-parsers", "crates/usage-monitor-cc-switch", "crates/usage-monitor-storage", "crates/usage-monitor-pricing", "crates/usage-monitor-web", "crates/usage-monitor-tui"]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+[package]
+name = "usage-monitor"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "AI coding tool token usage tracker — Web dashboard + TUI"
+
+[[bin]]
+name = "usage-monitor"
+path = "src/main.rs"
+
+[dependencies]
+usage-monitor-core = { path = "crates/usage-monitor-core" }
+usage-monitor-parsers = { path = "crates/usage-monitor-parsers" }
+usage-monitor-cc-switch = { path = "crates/usage-monitor-cc-switch" }
+usage-monitor-storage = { path = "crates/usage-monitor-storage" }
+usage-monitor-pricing = { path = "crates/usage-monitor-pricing" }
+usage-monitor-web = { path = "crates/usage-monitor-web" }
+usage-monitor-tui = { path = "crates/usage-monitor-tui" }
+clap = { version = "4", features = ["derive"] }
+tokio = { version = "1", features = ["rt"] }
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+anyhow = "1"

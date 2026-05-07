@@ -1,0 +1,104 @@
+feature: 2026-05-07-core-engine
+created: 2026-05-07
+
+steps:
+  - action: "类型定义：实现 TokenBreakdown、UnifiedMessage 结构体及其方法（total_tokens、cache_hit_rate、clamp_negative）"
+    exit_signal: "单元测试覆盖：total_tokens() 不重复计入 cache_read、cache_hit_rate() 计算正确、clamp_negative() 修正所有负字段"
+    status: done
+
+  - action: "DataSource trait + DataSourceError：定义 trait 接口和错误枚举"
+    exit_signal: "可编译通过，下游 crate 能 use 并实现该 trait（用单元测试里的 mock DataSource 验证）"
+    status: done
+
+  - action: "协议归一化工具：subtract_cached_overlap()、cache_hit_rate()、normalize_model_id()"
+    exit_signal: "单元测试覆盖 OpenAI cache-inclusive 场景、cached >= input 边界、空模型名、点划线变体"
+    status: done
+
+  - action: "Scanner 框架：ScanTask + scan_directory() + scan_all()"
+    exit_signal: "单元测试覆盖单文件匹配、多模式、排除模式、空目录、多任务并行"
+    status: done
+
+  - action: "聚合逻辑：aggregate_by_date()、aggregate_by_model()、aggregate_by_session()"
+    exit_signal: "单元测试覆盖空输入、单条、多条同日、跨日、多模型、多 session、负值输入"
+    status: done
+
+  - action: "校验与收尾：clippy + cargo test 全绿 + cargo doc 无警告"
+    exit_signal: "所有测试通过，文档自动生成无警告，crate 可被下游依赖"
+    status: done
+
+checks:
+  - item: "TokenBreakdown::total_tokens() 不计入 cache_read（S1）"
+    source: 验收场景
+    status: passed
+
+  - item: "TokenBreakdown::cache_hit_rate() 计算正确，分母为 0 返回 0.0（S2-S3）"
+    source: 验收场景
+    status: passed
+
+  - item: "TokenBreakdown::clamp_negative() 修正所有负字段（S4）"
+    source: 验收场景
+    status: passed
+
+  - item: "subtract_cached_overlap() 正确分离，cached >= input 时不 panic（S5-S6）"
+    source: 验收场景
+    status: passed
+
+  - item: "normalize_model_id() 去日期后缀和点划线变体（S7）"
+    source: 验收场景
+    status: passed
+
+  - item: "scan_directory() / scan_all() 正确匹配和去重（S8-S9）"
+    source: 验收场景
+    status: passed
+
+  - item: "aggregate_by_date() 同日累加、跨日拆分（S10-S11）"
+    source: 验收场景
+    status: passed
+
+  - item: "aggregate_by_model() 正确统计 session_count（S12）"
+    source: 验收场景
+    status: passed
+
+  - item: "aggregate_by_session() 正确统计 message_count（S13）"
+    source: 验收场景
+    status: passed
+
+  - item: "所有聚合函数空输入不 panic（S14）"
+    source: 验收场景
+    status: passed
+
+  - item: "聚合输出全字段 ≥ 0（S15）"
+    source: 验收场景
+    status: passed
+
+  - item: "代码不包含对 AI API 的 HTTP 调用"
+    source: 范围守护
+    status: passed
+
+  - item: "代码不包含 SQL 或数据库连接"
+    source: 范围守护
+    status: passed
+
+  - item: "代码不包含定价计算逻辑"
+    source: 范围守护
+    status: passed
+
+  - item: "不依赖 tokio，纯同步库"
+    source: 范围守护
+    status: passed
+
+  - item: "TokenBreakdown 字段名和语义符合接口契约 4.1"
+    source: 名词契约
+    status: passed
+
+  - item: "DataSource trait 签名符合接口契约 4.2（name / enabled / collect）"
+    source: 名词契约
+    status: passed
+
+  - item: "Cargo.toml 声明 usage-monitor-core crate"
+    source: 挂载点
+    status: passed
+
+  - item: "crates/usage-monitor-core/src/lib.rs 模块入口"
+    source: 挂载点
+    status: passed

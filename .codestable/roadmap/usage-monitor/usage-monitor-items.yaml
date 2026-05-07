@@ -1,0 +1,67 @@
+roadmap: usage-monitor
+created: 2026-05-07
+
+items:
+  - slug: core-engine
+    description: 定义 UnifiedMessage、TokenBreakdown、DataSource trait、协议归一化工具、文件扫描框架、聚合逻辑。纯库 + 单元测试。
+    depends_on: []
+    status: done
+    feature: 2026-05-07-core-engine
+    minimal_loop: false
+    notes: null
+
+  - slug: cli-entry
+    description: CLI 入口框架：子命令解析（serve / tui / scan）、配置加载、统一初始化。做完后 usage-monitor --help 可运行。
+    depends_on: []
+    status: done
+    feature: 2026-05-08-cli-entry
+    minimal_loop: false
+    notes: null
+
+  - slug: parsers-native
+    description: 7 个工具的 session 文件解析器（Claude Code、Codex、Kimi Code、Gemini CLI、Pi、OpenClaw、Hermess），每工具一个 parser，输出 UnifiedMessage。最小闭环中 Claude Code parser 先行。
+    depends_on: [core-engine]
+    status: done
+    feature: 2026-05-08-parsers-native
+    minimal_loop: true
+    notes: Claude Code parser 实测 11,317 条消息、73.2% 缓存命中率
+
+  - slug: cc-switch-adapter
+    description: 读 CC Switch DB proxy_request_logs 表，转换为 UnifiedMessage 流。实现 DataSource trait。零配置。
+    depends_on: [core-engine]
+    status: done
+    feature: 2026-05-08-cc-switch-adapter
+    minimal_loop: false
+    notes: CC Switch 实测 6,408 条消息
+
+  - slug: storage-layer
+    description: SQLite schema（messages + daily_rollups + model_pricing）+ 批量写入 API + 多维度查询 API。
+    depends_on: [core-engine]
+    status: done
+    feature: 2026-05-08-storage-layer
+    minimal_loop: false
+    notes: 实测 17,826 条消息持久化
+
+  - slug: pricing-engine
+    description: 模型定价——CC Switch 定价表 + 手写 fallback（10 模型）+ 查询/计算接口。
+    depends_on: [core-engine]
+    status: done
+    feature: 2026-05-08-pricing-engine
+    minimal_loop: false
+    notes: 实测计算 $226.65 总花费
+
+  - slug: web-dashboard
+    description: HTTP API + 内嵌前端（Chart.js）。usage-monitor serve 启动，端口 4317。
+    depends_on: [core-engine, storage-layer, pricing-engine, parsers-native, cc-switch-adapter]
+    status: done
+    feature: 2026-05-08-web-dashboard
+    minimal_loop: false
+    notes: axum + 单页 HTML + Chart.js 柱状图，实测服务正常运行
+
+  - slug: tui
+    description: usage-monitor tui 子命令。终端概览卡片 + 模型排行表 + Tab/q/↑↓ 键盘导航。
+    depends_on: [core-engine, storage-layer, pricing-engine]
+    status: done
+    feature: 2026-05-08-tui
+    minimal_loop: false
+    notes: ratatui + crossterm 实现

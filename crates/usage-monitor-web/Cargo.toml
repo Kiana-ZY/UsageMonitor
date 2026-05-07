@@ -1,0 +1,20 @@
+[package]
+name = "usage-monitor-web"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "UsageMonitor web dashboard — axum HTTP API + embedded frontend"
+
+[dependencies]
+usage-monitor-core = { path = "../usage-monitor-core" }
+usage-monitor-storage = { path = "../usage-monitor-storage" }
+usage-monitor-pricing = { path = "../usage-monitor-pricing" }
+usage-monitor-parsers = { path = "../usage-monitor-parsers" }
+usage-monitor-cc-switch = { path = "../usage-monitor-cc-switch" }
+axum = "0.7"
+anyhow = "1"
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tower = "0.4"
+tower-http = { version = "0.5", features = ["cors"] }

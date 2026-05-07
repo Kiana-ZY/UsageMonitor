@@ -1,0 +1,72 @@
+feature: 2026-05-08-cli-entry
+created: 2026-05-08
+
+steps:
+  - action: "Cargo 配置：workspace root Cargo.toml 加 clap/toml/serde 依赖 + 引用 usage-monitor-core"
+    exit_signal: "cargo check 通过，依赖全部解析"
+    status: done
+
+  - action: "CLI 结构：实现 Cli + Command enum + 三个 handler 占位"
+    exit_signal: "cargo run -- --help 输出三个子命令；cargo run -- serve|tui|scan 各打印占位消息"
+    status: done
+
+  - action: "配置加载：实现 Config struct + load_config()"
+    exit_signal: "无配置时静默默认；错误配置打印 warning；正确配置反序列化成功"
+    status: done
+
+  - action: "校验与收尾：clippy + cargo test + cargo run 全验证"
+    exit_signal: "clippy 0 warn，所有验收场景手动验证通过"
+    status: done
+
+checks:
+  - item: "usage-monitor --help 输出三个子命令（S1）"
+    source: 验收场景
+    status: passed
+
+  - item: "usage-monitor --version 输出版本号（S2）"
+    source: 验收场景
+    status: passed
+
+  - item: "serve 占位输出正确，支持 --port（S3-S4）"
+    source: 验收场景
+    status: passed
+
+  - item: "tui 占位输出正确（S5）"
+    source: 验收场景
+    status: passed
+
+  - item: "scan 占位输出正确（S6）"
+    source: 验收场景
+    status: passed
+
+  - item: "无配置文件时静默使用默认值（S7）"
+    source: 验收场景
+    status: passed
+
+  - item: "错误配置文件打印 warning 不阻止启动（S8）"
+    source: 验收场景
+    status: passed
+
+  - item: "正确配置文件反序列化成功（S9）"
+    source: 验收场景
+    status: passed
+
+  - item: "代码不包含 HTTP 服务启动逻辑"
+    source: 范围守护
+    status: passed
+
+  - item: "代码不包含 TUI 渲染逻辑"
+    source: 范围守护
+    status: passed
+
+  - item: "代码不包含文件扫描逻辑"
+    source: 范围守护
+    status: passed
+
+  - item: "Cargo.toml 加 clap/toml/serde 依赖"
+    source: 挂载点
+    status: passed
+
+  - item: "src/main.rs CLI 入口替换 hello world"
+    source: 挂载点
+    status: passed
