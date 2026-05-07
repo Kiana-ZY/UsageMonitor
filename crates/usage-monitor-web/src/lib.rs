@@ -63,6 +63,7 @@ pub async fn serve(db_path: PathBuf, home: PathBuf, start_port: u16) -> anyhow::
         .route("/api/models", get(api_models))
         .route("/api/sessions", get(api_sessions))
         .route("/api/daily", get(api_daily))
+        .route("/api/heatmap", get(api_heatmap))
         .route("/api/scan", post(api_scan))
         .layer(CorsLayer::permissive())
         .with_state(state);
@@ -239,4 +240,30 @@ async fn api_scan(State(state): State<AppState>) -> Json<serde_json::Value> {
         "total": all_messages.len(),
         "inserted": inserted,
     }))
+}
+
+async fn api_heatmap(State(state): State<AppState>) -> Json<Vec<serde_json::Value>> {
+    use std::collections::HashMap;
+    let conn = state.storage.lock();
+    let mut stmt = conn.prepare(
+        "SELECT date(timestamp/1000,'unixepoch','localtime') as d,
+                SUM(input_tokens), SUM(output_tokens), SUM(cache_read_tokens), SUM(cost_usd), COUNT(*)
+         FROM messages GROUP BY d ORDER BY d"
+    ).unwrap();
+    let rows = stmt.query_map([], |row| Ok((
+        row.get::<_,String>(0)?, row.get::<_,i64>(1)?, row.get::<_,i64>(2)?,
+        row.get::<_,i64>(3)?, row.get::<_,f64>(4)?, row.get::<_,i64>(5)?,
+    ))).unwrap();
+
+    let mut map: HashMap<String, (i64,i64,i64,f64,i64)> = HashMap::new();
+    for row in rows.flatten() {
+        let (d, inp, out, cr, cost, cnt) = row;
+        let e = map.entry(d).or_default();
+        e.0 += inp; e.1 += out; e.2 += cr; e.3 += cost; e.4 += cnt;
+    }
+    let mut result: Vec<_> = map.into_iter().map(|(date,(inp,out,cr,cost,cnt))| {
+        serde_json::json!({"date":date,"input":inp,"output":out,"cache_read":cr,"cost":cost,"count":cnt})
+    }).collect();
+    result.sort_by(|a,b| a["date"].as_str().cmp(&b["date"].as_str()));
+    Json(result)
 }

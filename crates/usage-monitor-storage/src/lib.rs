@@ -51,7 +51,7 @@ impl Storage {
         Ok(Self { conn: Mutex::new(conn) })
     }
 
-    fn lock(&self) -> std::sync::MutexGuard<'_, Connection> {
+    pub fn lock(&self) -> std::sync::MutexGuard<'_, Connection> {
         self.conn.lock().unwrap()
     }
 
