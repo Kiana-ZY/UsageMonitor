@@ -6,129 +6,310 @@
 <title>UsageMonitor</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4"></script>
 <style>
+:root {
+  --bg: #0d1117;
+  --surface: #161b22;
+  --border: #30363d;
+  --muted: #8b949e;
+  --dim: #484f58;
+  --text: #e6edf3;
+  --accent: #58a6ff;
+  --green: #3fb950;
+  --purple: #bc8cff;
+  --orange: #d2991d;
+  --red: #f85149;
+  --grade0: #161b22;
+  --grade1: #0e4429;
+  --grade2: #006d32;
+  --grade3: #26a641;
+  --grade4: #39d353;
+}
 *{margin:0;padding:0;box-sizing:border-box}
-body{font-family:system-ui,-apple-system,sans-serif;background:#0f1117;color:#e4e4e7;min-height:100vh}
-.header{background:#1a1c24;border-bottom:1px solid #2a2d37;padding:12px 24px;display:flex;align-items:center;justify-content:space-between}
-.header h1{font-size:18px;font-weight:600}
-.header button{background:#2563eb;color:#fff;border:none;padding:6px 16px;border-radius:6px;cursor:pointer;font-size:13px}
-.header button:hover{background:#1d4ed8}
-.grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;padding:20px 24px}
-.card{background:#1a1c24;border:1px solid #2a2d37;border-radius:8px;padding:16px}
-.card .label{font-size:11px;color:#9ca3af;text-transform:uppercase;letter-spacing:.5px}
-.card .value{font-size:28px;font-weight:700;margin-top:4px}
-.card .sub{font-size:12px;color:#6b7280;margin-top:2px}
-.charts{display:grid;grid-template-columns:2fr 1fr;gap:12px;padding:0 24px 20px}
-.chart-card{background:#1a1c24;border:1px solid #2a2d37;border-radius:8px;padding:16px}
-.chart-card h3{font-size:13px;font-weight:600;margin-bottom:12px;color:#9ca3af;text-transform:uppercase;letter-spacing:.5px}
-table{width:100%;border-collapse:collapse;font-size:13px}
-th{text-align:left;padding:8px 12px;border-bottom:1px solid #2a2d37;color:#9ca3af;font-weight:500;font-size:11px}
-td{padding:8px 12px;border-bottom:1px solid #1f2129}
-tr:hover{background:#1f2129}
+html{scroll-behavior:smooth}
+body{
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;
+  background:var(--bg);color:var(--text);min-height:100vh;overflow-y:auto;
+  line-height:1.5;
+}
+/* ── Header ── */
+.header{
+  background:var(--surface);border-bottom:1px solid var(--border);
+  padding:16px 32px;display:flex;align-items:center;justify-content:space-between;
+  position:sticky;top:0;z-index:10;
+}
+.header-left{display:flex;align-items:center;gap:12px}
+.header h1{font-size:18px;font-weight:600;letter-spacing:-0.3px}
+.header .ver{font-size:11px;color:var(--dim);background:var(--bg);padding:2px 8px;border-radius:10px;border:1px solid var(--border)}
+.header-right{display:flex;align-items:center;gap:12px}
+.header .status{font-size:12px;color:var(--muted)}
+.header button{
+  background:var(--surface);color:var(--text);border:1px solid var(--border);
+  padding:6px 16px;border-radius:6px;cursor:pointer;font-size:12px;font-weight:500;
+  transition:all .15s;
+}
+.header button:hover{background:var(--accent);color:#fff;border-color:var(--accent)}
+.header button.primary{background:#238636;border-color:#238636;color:#fff}
+.header button.primary:hover{background:#2ea043}
+/* ── Content ── */
+.content{max-width:1280px;margin:0 auto;padding:24px 32px 48px}
+/* ── Stats Grid ── */
+.stats-grid{
+  display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:24px;
+}
+.stat-card{
+  background:var(--surface);border:1px solid var(--border);border-radius:8px;
+  padding:16px 20px;transition:border-color .15s;
+}
+.stat-card:hover{border-color:var(--dim)}
+.stat-card .label{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px}
+.stat-card .value{font-size:26px;font-weight:700;letter-spacing:-0.5px}
+.stat-card .sub{font-size:12px;color:var(--dim);margin-top:2px}
+.stat-card.highlight .value{color:var(--green)}
+.stat-card.accent .value{color:var(--accent)}
+/* ── Section ── */
+.section{margin-bottom:24px}
+.section-title{
+  font-size:13px;font-weight:600;color:var(--muted);text-transform:uppercase;
+  letter-spacing:.5px;margin-bottom:12px;
+}
+/* ── Chart Row ── */
+.chart-row{display:grid;grid-template-columns:2fr 1fr;gap:12px;margin-bottom:12px}
+/* ── Card ── */
+.card{
+  background:var(--surface);border:1px solid var(--border);border-radius:8px;
+  padding:20px;
+}
+.card-header{font-size:13px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:16px}
+/* ── Table ── */
+.table-wrap{overflow-x:auto;-webkit-overflow-scrolling:touch}
+table{width:100%;border-collapse:collapse;font-size:13px;min-width:500px}
+th{
+  text-align:left;padding:8px 12px;border-bottom:1px solid var(--border);
+  color:var(--muted);font-weight:500;font-size:11px;text-transform:uppercase;letter-spacing:.3px;
+  white-space:nowrap;
+}
+td{padding:10px 12px;border-bottom:1px solid rgba(48,54,61,0.5)}
+tr:hover td{background:rgba(255,255,255,0.02)}
 .num{text-align:right;font-variant-numeric:tabular-nums}
-.loading{text-align:center;padding:40px;color:#6b7280}
+.cell-model{font-weight:500;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* ── Badge ── */
+.badge{
+  display:inline-block;padding:2px 8px;border-radius:10px;font-size:11px;
+  font-weight:500;letter-spacing:.2px;
+}
+.badge-claude{background:rgba(88,166,255,0.15);color:var(--accent)}
+.badge-codex{background:rgba(188,140,255,0.15);color:var(--purple)}
+.badge-kimi{background:rgba(210,153,29,0.15);color:var(--orange)}
+.badge-cc{background:rgba(63,185,80,0.12);color:var(--green)}
+.badge-native{background:rgba(139,148,158,0.12);color:var(--muted)}
+/* ── Heatmap ── */
+.heatmap-wrap{overflow-x:auto;padding-bottom:8px}
+#heatmap{display:block}
+/* ── Responsive ── */
+@media (max-width:900px){
+  .content{padding:16px}
+  .stats-grid{grid-template-columns:repeat(2,1fr)}
+  .chart-row{grid-template-columns:1fr}
+}
+@media (max-width:560px){
+  .stats-grid{grid-template-columns:1fr}
+  .header{padding:12px 16px}
+}
+/* ── Scrollbar ── */
+::-webkit-scrollbar{width:8px;height:8px}
+::-webkit-scrollbar-track{background:var(--bg)}
+::-webkit-scrollbar-thumb{background:var(--border);border-radius:4px}
+::-webkit-scrollbar-thumb:hover{background:var(--dim)}
 </style>
 </head>
 <body>
 <div class="header">
-<h1>📊 UsageMonitor</h1>
-<div>
-<span id="status" style="color:#6b7280;font-size:12px;margin-right:12px">Ready</span>
-<button onclick="doScan()">Scan Now</button>
+  <div class="header-left">
+    <h1>UsageMonitor</h1>
+    <span class="ver">v0.1.0</span>
+  </div>
+  <div class="header-right">
+    <span class="status" id="status">Ready</span>
+    <button class="primary" onclick="doScan()">Scan Now</button>
+    <button onclick="location.reload()">Refresh</button>
+  </div>
 </div>
-</div>
-<div class="grid">
-<div class="card"><div class="label">Total Input</div><div class="value" id="inp">-</div><div class="sub">tokens</div></div>
-<div class="card"><div class="label">Total Output</div><div class="value" id="out">-</div><div class="sub">tokens</div></div>
-<div class="card"><div class="label">Cache Hit Rate</div><div class="value" id="chr">-</div><div class="sub">cache_read / total</div></div>
-<div class="card"><div class="label">Messages</div><div class="value" id="msg">-</div><div class="sub" id="tools"></div></div>
-</div>
-<div class="charts">
-<div class="chart-card"><h3>Daily Token Usage (Last 30 days)</h3><canvas id="dailyChart"></canvas></div>
-<div class="chart-card"><h3>Models</h3><div id="modelsTable"></div></div>
-</div>
-<div style="padding:0 24px 20px">
-<div class="chart-card"><h3>Recent Sessions</h3><div id="sessionsTable"></div></div>
+
+<div class="content">
+
+  <!-- Stats Row -->
+  <div class="stats-grid" id="statsGrid">
+    <div class="stat-card"><div class="label">Total Cost</div><div class="value" id="sCost">-</div><div class="sub">USD</div></div>
+    <div class="stat-card"><div class="label">Total Tokens</div><div class="value" id="sTokens">-</div><div class="sub">input + output + cache write</div></div>
+    <div class="stat-card highlight"><div class="label">Cache Hit Rate</div><div class="value" id="sCHR">-</div><div class="sub">cache_read / total</div></div>
+    <div class="stat-card"><div class="label">Messages</div><div class="value" id="sMsgs">-</div><div class="sub" id="sTools">-</div></div>
+    <div class="stat-card"><div class="label">Input Tokens</div><div class="value" id="sInput">-</div><div class="sub"></div></div>
+    <div class="stat-card"><div class="label">Output Tokens</div><div class="value" id="sOutput">-</div><div class="sub"></div></div>
+    <div class="stat-card accent"><div class="label">Cache Read</div><div class="value" id="sCacheR">-</div><div class="sub">tokens saved</div></div>
+    <div class="stat-card"><div class="label">Models</div><div class="value" id="sModels">-</div><div class="sub" id="sSources">-</div></div>
+  </div>
+
+  <!-- Chart + Models -->
+  <div class="chart-row">
+    <div class="card">
+      <div class="card-header">Daily Token Usage</div>
+      <div style="position:relative;height:280px"><canvas id="dailyChart"></canvas></div>
+    </div>
+    <div class="card">
+      <div class="card-header">Top Models</div>
+      <div class="table-wrap" id="modelsTable" style="max-height:304px;overflow-y:auto">Loading…</div>
+    </div>
+  </div>
+
+  <!-- Model Detail Table -->
+  <div class="section">
+    <div class="card">
+      <div class="card-header">All Models</div>
+      <div class="table-wrap" id="modelsFull"></div>
+    </div>
+  </div>
+
+  <!-- Sessions -->
+  <div class="section">
+    <div class="card">
+      <div class="card-header">Recent Sessions</div>
+      <div class="table-wrap" id="sessionsTable"></div>
+    </div>
+  </div>
+
 </div>
 
 <script>
-const fmt = n => {if(n>=1e9)return (n/1e9).toFixed(1)+'B';if(n>=1e6)return (n/1e6).toFixed(1)+'M';if(n>=1e3)return (n/1e3).toFixed(0)+'K';return n};
+const fmt = n => {if(Math.abs(n)>=1e9)return (n/1e9).toFixed(1)+'B';if(n>=1e6)return (n/1e6).toFixed(1)+'M';if(n>=1e3)return (n/1e3).toFixed(0)+'K';return String(n)};
 const fmtPct = n => (n*100).toFixed(1)+'%';
+const fmtUSD = n => '$'+n.toFixed(2);
+const fmtDate = d => {const dt=new Date(d+'T00:00');return dt.toLocaleDateString('en-US',{month:'short',day:'numeric'})};
 
 let dailyChart;
 
 async function load() {
   try {
-    const r = await fetch('/api/summary');
-    const d = await r.json();
-    document.getElementById('inp').textContent = fmt(d.total_input);
-    document.getElementById('out').textContent = fmt(d.total_output);
-    document.getElementById('chr').textContent = fmtPct(d.cache_hit_rate);
-    document.getElementById('msg').textContent = fmt(d.message_count);
-    document.getElementById('tools').textContent = `${d.tool_count} tools`;
-    renderDaily(d.daily);
-    renderModels(d.models);
-  } catch(e) {
-    document.getElementById('status').textContent = 'Error loading';
-  }
+    const [sr, mr, ses] = await Promise.all([
+      fetch('/api/summary').then(r=>r.json()),
+      fetch('/api/models').then(r=>r.json()),
+      fetch('/api/sessions').then(r=>r.json()),
+    ]);
 
-  try {
-    const r = await fetch('/api/sessions');
-    const sessions = await r.json();
-    renderSessions(sessions);
-  } catch(e) {}
+    let totalCost = 0, totalInput = 0, totalOutput = 0, totalCacheR = 0, totalCacheW = 0;
+    mr.forEach(m=>{
+      totalInput+=m.input; totalOutput+=m.output; totalCacheR+=m.cache_read;
+      totalCacheW+=m.cache_write; totalCost+=m.estimated_cost||0;
+    });
+    const totalTokens = totalInput + totalOutput + totalCacheW;
+    const chr = totalInput+totalCacheR > 0 ? totalCacheR/(totalInput+totalCacheR) : 0;
+
+    document.getElementById('sCost').textContent = fmtUSD(totalCost);
+    document.getElementById('sTokens').textContent = fmt(totalTokens);
+    document.getElementById('sCHR').textContent = fmtPct(chr);
+    document.getElementById('sMsgs').textContent = fmt(sr.message_count);
+    document.getElementById('sTools').textContent = `${sr.tool_count} tools`;
+    document.getElementById('sInput').textContent = fmt(totalInput);
+    document.getElementById('sOutput').textContent = fmt(totalOutput);
+    document.getElementById('sCacheR').textContent = fmt(totalCacheR);
+    document.getElementById('sModels').textContent = mr.length;
+    document.getElementById('sSources').innerHTML = `<span class="badge badge-cc">CC Switch</span> <span class="badge badge-native">Native</span>`;
+
+    renderDaily(sr.daily||[]);
+    renderModels(mr);
+    renderSessions(ses);
+    document.getElementById('status').textContent = `${fmt(sr.message_count)} msgs · ${fmtPct(chr)} CHR`;
+  } catch(e) {
+    document.getElementById('status').textContent = 'Error loading: '+e.message;
+  }
 }
 
 function renderDaily(daily) {
   const ctx = document.getElementById('dailyChart').getContext('2d');
-  const data = daily.slice(-30);
+  const data = daily.slice(-60);
   if (dailyChart) dailyChart.destroy();
   dailyChart = new Chart(ctx, {
     type: 'bar',
     data: {
-      labels: data.map(d=>d.date),
+      labels: data.map(d=>fmtDate(d.date)),
       datasets: [
-        {label:'Input',data:data.map(d=>d.input),backgroundColor:'#3b82f6',borderRadius:2},
-        {label:'Output',data:data.map(d=>d.output),backgroundColor:'#8b5cf6',borderRadius:2},
-        {label:'Cache Read',data:data.map(d=>d.cache_read),backgroundColor:'#22c55e',borderRadius:2},
+        {label:'Input',data:data.map(d=>d.input),backgroundColor:'#58a6ff',borderRadius:2,borderSkipped:false},
+        {label:'Output',data:data.map(d=>d.output),backgroundColor:'#bc8cff',borderRadius:2,borderSkipped:false},
+        {label:'Cache Read',data:data.map(d=>d.cache_read),backgroundColor:'#3fb950',borderRadius:2,borderSkipped:false},
       ]
     },
     options: {
-      responsive:true,
-      maintainAspectRatio:false,
-      plugins:{legend:{labels:{color:'#9ca3af',font:{size:11}}}},
+      responsive:true,maintainAspectRatio:false,
+      interaction:{mode:'index',intersect:false},
+      plugins:{
+        legend:{labels:{color:'#8b949e',font:{size:11},usePointStyle:true,pointStyleWidth:8,padding:16}},
+        tooltip:{backgroundColor:'#161b22',borderColor:'#30363d',borderWidth:1,titleColor:'#e6edf3',bodyColor:'#8b949e'}
+      },
       scales:{
-        x:{ticks:{color:'#6b7280',font:{size:10}},grid:{color:'#1f2129'}},
-        y:{ticks:{color:'#6b7280',font:{size:10},callback:v=>fmt(v)},grid:{color:'#1f2129'}}
+        x:{ticks:{color:'#484f58',font:{size:10},maxTicksLimit:15},grid:{color:'#21262d'}},
+        y:{ticks:{color:'#484f58',font:{size:10},callback:v=>fmt(v)},grid:{color:'#21262d'},beginAtZero:true}
       }
     }
   });
 }
 
 function renderModels(models) {
-  const top = models.slice(0,15);
-  document.getElementById('modelsTable').innerHTML = `
+  // Mini table (top 8)
+  document.getElementById('modelsTable').innerHTML = models.slice(0,8).map(m=>`
+    <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid rgba(48,54,61,0.4)">
+      <span style="font-size:13px;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:140px" title="${m.model_id}">${m.model_id}</span>
+      <span style="font-size:11px;color:var(--dim)">${fmt(m.input+m.output)}</span>
+      <span style="font-size:12px;font-weight:500">${fmtUSD(m.estimated_cost||0)}</span>
+    </div>
+  `).join('');
+
+  // Full table
+  const rows = models.map(m=>`
+    <tr>
+      <td class="cell-model" title="${m.model_id}">${m.model_id}</td>
+      <td class="num">${fmt(m.input)}</td>
+      <td class="num">${fmt(m.output)}</td>
+      <td class="num" style="color:var(--green)">${fmt(m.cache_read)}</td>
+      <td class="num">${fmt(m.cache_write||0)}</td>
+      <td class="num">${m.sessions}</td>
+      <td class="num">${m.requests}</td>
+      <td class="num" style="font-weight:600">${fmtUSD(m.estimated_cost||0)}</td>
+    </tr>
+  `).join('');
+  document.getElementById('modelsFull').innerHTML = `
     <table>
-    <tr><th>Model</th><th class="num">Input</th><th class="num">Output</th><th class="num">Cache Read</th><th class="num">Sessions</th></tr>
-    ${top.map(m=>`<tr><td>${m.model_id}</td><td class="num">${fmt(m.input)}</td><td class="num">${fmt(m.output)}</td><td class="num">${fmt(m.cache_read)}</td><td class="num">${m.sessions}</td></tr>`).join('')}
-    </table>`;
+    <thead><tr>
+      <th>Model</th><th class="num">Input</th><th class="num">Output</th><th class="num">Cache Read</th><th class="num">Cache Write</th><th class="num">Sessions</th><th class="num">Requests</th><th class="num">Est. Cost</th>
+    </tr></thead>
+    <tbody>${rows}</tbody></table>`;
 }
 
 function renderSessions(sessions) {
-  const top = sessions.slice(0,20);
   document.getElementById('sessionsTable').innerHTML = `
     <table>
-    <tr><th>Session</th><th>Client</th><th>Model</th><th class="num">Input</th><th class="num">Output</th><th class="num">Cache</th><th class="num">Msgs</th></tr>
-    ${top.map(s=>`<tr><td style="font-family:monospace;font-size:11px">${s.session_id.slice(0,8)}...</td><td>${s.client}</td><td>${s.model_id}</td><td class="num">${fmt(s.input)}</td><td class="num">${fmt(s.output)}</td><td class="num">${fmt(s.cache_read)}</td><td class="num">${s.messages}</td></tr>`).join('')}
-    </table>`;
+    <thead><tr>
+      <th>Session</th><th>Client</th><th>Model</th><th class="num">Input</th><th class="num">Output</th><th class="num">Cache Read</th><th class="num">Msgs</th><th class="num">Cost</th>
+    </tr></thead>
+    <tbody>${sessions.slice(0,50).map(s=>`
+    <tr>
+      <td><code style="font-size:11px;color:var(--accent)">${s.session_id.slice(0,8)}</code></td>
+      <td><span class="badge badge-${s.client}">${s.client}</span></td>
+      <td style="max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${s.model_id}">${s.model_id}</td>
+      <td class="num">${fmt(s.input)}</td>
+      <td class="num">${fmt(s.output)}</td>
+      <td class="num" style="color:var(--green)">${fmt(s.cache_read)}</td>
+      <td class="num">${s.messages}</td>
+      <td class="num" style="font-weight:500">${fmtUSD(s.estimated_cost||0)}</td>
+    </tr>`).join('')}
+    </tbody></table>`;
 }
 
 async function doScan() {
-  document.getElementById('status').textContent = 'Scanning...';
+  document.getElementById('status').textContent = 'Scanning…';
   try {
-    const r = await fetch('/api/scan', {method:'POST'});
+    const r = await fetch('/api/scan',{method:'POST'});
     const d = await r.json();
     document.getElementById('status').textContent = `Scanned ${d.total} msgs (${d.inserted} new)`;
-    setTimeout(load, 500);
+    setTimeout(load,600);
   } catch(e) {
     document.getElementById('status').textContent = 'Scan failed';
   }
