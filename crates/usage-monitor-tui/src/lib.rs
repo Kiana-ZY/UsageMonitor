@@ -157,12 +157,15 @@ fn ui(f:&mut Frame,app:&App){
 
     let used=app.total_input+app.total_output+app.total_cache_write;
     let chr=if app.total_input+app.total_cache_read>0{app.total_cache_read as f64/(app.total_input+app.total_cache_read)as f64}else{0.0};
+    let avg=if app.msg_count>0{used/app.msg_count}else{0};
     f.render_widget(Paragraph::new(Line::from(vec![
         Span::styled(" UsageMonitor ",Style::default().fg(Color::White).bold()),
         Span::styled(format!("│ {} ",format_tokens(used as u64)),Style::default().fg(Color::Cyan)),
         Span::styled(format!("{} ",format_cost(app.total_cost)),Style::default().fg(Color::Green)),
         Span::styled(format!("CHR {:.1}% ",chr*100.0),Style::default().fg(Color::Yellow)),
+        Span::styled(format!("avg {} ",format_tokens(avg as u64)),Style::default().fg(Color::Magenta)),
         Span::styled(format!("{} msgs ",app.msg_count),Style::default().fg(MUTED)),
+        Span::styled(format!("{} models ",app.models.len()),Style::default().fg(DIM)),
     ])).bg(BG),chunks[0]);
 
     let tabs=Tabs::new(vec![" Overview "," Models "," Daily "," Stats "]).select(app.tab)
@@ -180,11 +183,23 @@ fn ui(f:&mut Frame,app:&App){
     ])).bg(BG),chunks[3]);
 }
 
-// ── Overview (Tokscale pattern: bg fill + stacked chart + legend + 2-line model rows + scrollbar) ──
+// ── Overview (Tokscale pattern: KPI cards + bg fill + stacked chart + legend + 2-line model rows + scrollbar) ──
 fn tab_overview(f:&mut Frame,area:Rect,app:&App){
     f.render_widget(Block::default().style(Style::default().bg(BG)),area);
-    let chart_h=((area.height as f64)*0.35).floor().max(5.0) as u16;
-    let chunks=Layout::vertical([Constraint::Length(chart_h),Constraint::Length(1),Constraint::Min(0)]).split(area);
+    let safe_h=area.height.max(12)as usize;
+    let kpi_h=8u16;
+    let chart_h=((safe_h as f64)*0.32).floor().max(5.0) as u16;
+    let legend_h=1u16;
+    let list_h=area.height.saturating_sub(kpi_h+chart_h+legend_h+2);
+    let chunks=Layout::vertical([Constraint::Length(kpi_h),Constraint::Length(chart_h),Constraint::Length(legend_h),Constraint::Min(0)]).split(area);
+
+    // KPI cards
+    let cards=Layout::horizontal([Constraint::Ratio(1,4);4]).split(chunks[0]);
+    let used=app.total_input+app.total_output+app.total_cache_write;
+    let chr=if app.total_input+app.total_cache_read>0{app.total_cache_read as f64/(app.total_input+app.total_cache_read)as f64}else{0.0};
+    for(i,(l,v,s,c))in[("Tokens",format_tokens(used as u64),format!("in {} · out {} · cw {}",format_tokens(app.total_input as u64),format_tokens(app.total_output as u64),format_tokens(app.total_cache_write as u64)),Color::White),("Cost",format_cost(app.total_cost),format!("{} models · {} msgs",app.models.len(),app.msg_count),Color::Green),("Cache Hit",format!("{:.1}%",chr*100.0),format!("{} CR · {} CW",format_tokens(app.total_cache_read as u64),format_tokens(app.total_cache_write as u64)),Color::Yellow),("Per Request",format_tokens(if app.msg_count>0{(used/app.msg_count)as u64}else{0}),format!("avg tokens/msg"),Color::Cyan)].iter().enumerate(){
+        f.render_widget(Paragraph::new(vec![Line::from(Span::styled(l.to_string(),Style::default().fg(MUTED))),Line::from(Span::styled(v.clone(),Style::default().fg(*c).bold())),Line::from(Span::styled(s.clone(),Style::default().fg(DIM)))]).block(Block::default().borders(Borders::ALL).border_style(Style::default().fg(BORDER))),cards[i]);
+    }
 
     // Stacked chart
     let bar_data:Vec<StackedBarData>=app.daily.iter().rev().take(60).map(|d|StackedBarData{
@@ -192,18 +207,18 @@ fn tab_overview(f:&mut Frame,area:Rect,app:&App){
         total:d.total as u64,
         models:d.models.iter().map(|(name,tok)|{let (color,_)=app.model_shade.get(name).copied().unwrap_or((Color::Gray,0));ModelSegment{model_id:name.clone(),tokens:*tok as u64,color}}).collect(),
     }).collect();
-    render_stacked_bar_chart(f,chunks[0],&bar_data,MUTED);
+    render_stacked_bar_chart(f,chunks[1],&bar_data,MUTED);
 
     // Legend
     let mut sorted:Vec<_>=app.model_shade.iter().collect();sorted.sort_by(|a,b|a.1.1.cmp(&b.1.1));
-    let legend:Vec<Span>=sorted.iter().take(5).flat_map(|(name,(c,_))|vec![
+    let legend:Vec<Span>=sorted.iter().take(6).flat_map(|(name,(c,_))|vec![
         Span::styled("● ",Style::default().fg(*c)),
-        Span::styled(format!("{}  ·",trunc(name,18)),Style::default().fg(MUTED)),
+        Span::styled(format!("{}  ·",trunc(name,16)),Style::default().fg(MUTED)),
     ]).collect();
-    f.render_widget(Paragraph::new(Line::from(legend)),chunks[1]);
+    f.render_widget(Paragraph::new(Line::from(legend)),chunks[2]);
 
-    // Top models (2-line rows like Tokscale)
-    render_top_models_tokscale_style(f,chunks[2],app);
+    // Top models
+    render_top_models_tokscale_style(f,chunks[3],app);
 }
 
 fn render_top_models_tokscale_style(f:&mut Frame,area:Rect,app:&App){
@@ -228,10 +243,12 @@ fn render_top_models_tokscale_style(f:&mut Frame,area:Rect,app:&App){
         let s=if is_sel{Style::default().bg(Color::Rgb(30,40,60)).fg(FG)}else{Style::default()};
         f.render_widget(Paragraph::new("").style(s),Rect::new(inner.x,y,inner.width,1));
 
+        let prov_name=get_provider_from_model(&m.model_id);
         let l1=Line::from(vec![
             Span::styled("● ",Style::default().fg(color)),
             Span::styled(format!("{} ",name),Style::default().fg(if is_sel{FG}else{color}).add_modifier(Modifier::BOLD)),
-            Span::styled(format!("({:.1}%)",pct),Style::default().fg(MUTED)),
+            Span::styled(format!("({:.1}%)  ",pct),Style::default().fg(MUTED)),
+            Span::styled(format!("[{}]",prov_name),Style::default().fg(DIM)),
         ]);
         f.render_widget(Paragraph::new(l1).style(s),Rect::new(inner.x,y,inner.width,1));y+=1;
 
