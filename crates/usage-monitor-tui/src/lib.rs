@@ -1,10 +1,13 @@
+// UsageMonitor TUI — adapted from Tokscale's ratatui architecture.
+// MIT-licensed reference: https://github.com/junhoyeo/tokscale
+
 use std::collections::HashMap;
 use std::io;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use crossterm::{
-    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind},
+    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind, MouseEventKind},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -20,375 +23,435 @@ use usage_monitor_pricing::PricingEngine;
 use usage_monitor_storage::Storage;
 
 const REFRESH_SECS: u64 = 15;
-const THEME_COUNT: usize = 5;
+const THEMES: usize = 5;
+
+// ── App state (Tokscale app.rs pattern) ──
 
 struct App {
-    tab: usize,
+    tab: Tab,
     scroll: usize,
     selected: usize,
     sort_col: u8,
     sort_desc: bool,
     theme: usize,
     last_refresh: Instant,
+    needs_reload: bool,
+    background_loading: bool,
     models: Vec<ModelRow>,
     sessions: Vec<SessRow>,
     daily: Vec<DailyRow>,
     heatmap: Vec<(String, i64)>,
+    agents: Vec<AgentRow>,
     msg_count: i64,
     total_cost: f64,
+    total_input: i64,
+    total_output: i64,
+    total_cache_read: i64,
+}
+
+#[derive(Clone, PartialEq)]
+enum Tab { Overview, Models, Daily, Stats, Agents, Sessions }
+
+impl Tab {
+    fn next(&self) -> Self { match self { Tab::Overview=>Tab::Models,Tab::Models=>Tab::Daily,Tab::Daily=>Tab::Stats,Tab::Stats=>Tab::Agents,Tab::Agents=>Tab::Sessions,Tab::Sessions=>Tab::Overview } }
+    fn name(&self) -> &str { match self { Tab::Overview=>"Overview",Tab::Models=>"Models",Tab::Daily=>"Daily",Tab::Stats=>"Stats",Tab::Agents=>"Agents",Tab::Sessions=>"Sessions" } }
+    fn all() -> Vec<Tab> { vec![Tab::Overview,Tab::Models,Tab::Daily,Tab::Stats,Tab::Agents,Tab::Sessions] }
 }
 
 #[derive(Clone)]
-struct ModelRow { model_id: String, input: i64, output: i64, cache_read: i64, cache_write: i64, sessions: usize, cost: f64 }
+struct ModelRow { model_id: String, input: i64, output: i64, cache_read: i64, cache_write: i64, sessions: usize, requests: usize, cost: f64 }
 #[derive(Clone)]
 struct SessRow { session_id: String, client: String, model_id: String, tokens: i64, cache_read: i64, messages: usize, cost: f64 }
 #[derive(Clone)]
-struct DailyRow { date: String, input: i64, output: i64, cache_read: i64, requests: usize }
+struct DailyRow { date: String, input: i64, output: i64, cache_read: i64, cache_write: i64, requests: usize, cost: f64 }
+#[derive(Clone)]
+struct AgentRow { name: String, client: String, tokens: i64, cost: f64, messages: i64 }
 
 impl App {
-    fn new(storage: &Storage, pricing: &PricingEngine) -> Self {
+    fn load(storage: &Storage, pricing: &PricingEngine) -> Self {
         let mut a = Self {
-            tab: 0, scroll: 0, selected: 0, sort_col: 0, sort_desc: true, theme: 0,
-            last_refresh: Instant::now(),
-            models: vec![], sessions: vec![], daily: vec![], heatmap: vec![],
-            msg_count: 0, total_cost: 0.0,
+            tab: Tab::Overview, scroll: 0, selected: 0, sort_col: 0, sort_desc: true,
+            theme: 0, last_refresh: Instant::now(), needs_reload: false, background_loading: false,
+            models: vec![], sessions: vec![], daily: vec![], heatmap: vec![], agents: vec![],
+            msg_count: 0, total_cost: 0.0, total_input: 0, total_output: 0, total_cache_read: 0,
         };
         a.reload(storage, pricing);
         a
     }
 
     fn reload(&mut self, storage: &Storage, pricing: &PricingEngine) {
-        let m = storage.query_models().unwrap_or_default();
-        let s = storage.query_sessions().unwrap_or_default();
+        self.background_loading = true;
+        let ms = storage.query_models().unwrap_or_default();
+        let ss = storage.query_sessions().unwrap_or_default();
         self.msg_count = storage.messages_count().unwrap_or(0);
-        self.models = m.iter().map(|x| ModelRow {
+
+        self.models = ms.iter().map(|x| ModelRow {
             model_id: x.model_id.clone(), input: x.tokens.input, output: x.tokens.output,
             cache_read: x.tokens.cache_read, cache_write: x.tokens.cache_write,
-            sessions: x.session_count, cost: pricing.calculate_cost(&x.model_id, &x.tokens),
+            sessions: x.session_count, requests: x.request_count,
+            cost: pricing.calculate_cost(&x.model_id, &x.tokens),
         }).collect();
-        self.sessions = s.iter().map(|x| SessRow {
+
+        self.total_input = self.models.iter().map(|m| m.input).sum();
+        self.total_output = self.models.iter().map(|m| m.output).sum();
+        self.total_cache_read = self.models.iter().map(|m| m.cache_read).sum();
+        self.total_cost = self.models.iter().map(|m| m.cost).sum();
+
+        self.sessions = ss.iter().map(|x| SessRow {
             session_id: x.session_id.clone(), client: x.client.clone(),
             model_id: x.model_id.clone(), tokens: x.tokens.input + x.tokens.output,
             cache_read: x.tokens.cache_read, messages: x.message_count,
             cost: pricing.calculate_cost(&x.model_id, &x.tokens),
         }).collect();
-        self.total_cost = self.models.iter().map(|m| m.cost).sum();
 
-        // Daily from messages
+        // Daily aggregation
         let conn = storage.lock();
         let mut stmt = conn.prepare(
-            "SELECT date(timestamp/1000,'unixepoch','localtime') as d, SUM(input_tokens), SUM(output_tokens), SUM(cache_read_tokens), COUNT(*) FROM messages GROUP BY d ORDER BY d"
+            "SELECT date(timestamp/1000,'unixepoch','localtime') as d, SUM(input_tokens), SUM(output_tokens),
+                    SUM(cache_read_tokens), SUM(cache_write_tokens), COUNT(*), SUM(cost_usd)
+             FROM messages GROUP BY d ORDER BY d"
         ).unwrap();
         self.daily = stmt.query_map([], |r| Ok(DailyRow{
-            date: r.get(0)?, input: r.get(1)?, output: r.get(2)?, cache_read: r.get(3)?, requests: r.get::<_,i64>(4)? as usize,
+            date: r.get(0)?, input: r.get(1)?, output: r.get(2)?,
+            cache_read: r.get(3)?, cache_write: r.get(4)?, requests: r.get::<_,i64>(5)? as usize, cost: r.get(6)?,
         })).unwrap().flatten().collect();
+
         self.heatmap = self.daily.iter().map(|d| (d.date.clone(), d.input + d.output)).collect();
-        self.sort_models();
+
+        // Agents
+        let mut agents: HashMap<String, (i64, f64, i64)> = HashMap::new();
+        for s in &self.sessions {
+            let key = format!("{}:{}", s.client, s.model_id);
+            let e = agents.entry(key).or_default();
+            e.0 += s.tokens; e.1 += s.cost; e.2 += s.messages as i64;
+        }
+        self.agents = agents.into_iter().map(|(k, (t, c, m))| {
+            let parts: Vec<&str> = k.splitn(2, ':').collect();
+            AgentRow { client: parts[0].into(), name: parts.get(1).unwrap_or(&"").to_string(), tokens: t, cost: c, messages: m }
+        }).collect();
+        self.agents.sort_by(|a,b| b.cost.partial_cmp(&a.cost).unwrap_or(std::cmp::Ordering::Equal));
+
+        self.sort();
+        self.background_loading = false;
     }
 
-    fn sort_models(&mut self) {
+    fn sort(&mut self) {
         match self.sort_col {
             0 => self.models.sort_by(|a,b| if self.sort_desc { b.model_id.cmp(&a.model_id) } else { a.model_id.cmp(&b.model_id) }),
             1 => self.models.sort_by(|a,b| if self.sort_desc { b.sessions.cmp(&a.sessions) } else { a.sessions.cmp(&b.sessions) }),
             2 => self.models.sort_by(|a,b| if self.sort_desc { (b.input+b.output).cmp(&(a.input+a.output)) } else { (a.input+a.output).cmp(&(b.input+b.output)) }),
             3 => self.models.sort_by(|a,b| if self.sort_desc { b.cache_read.cmp(&a.cache_read) } else { a.cache_read.cmp(&b.cache_read) }),
-            4 => self.models.sort_by(|a,b| if self.sort_desc { b.cost.partial_cmp(&a.cost).unwrap() } else { a.cost.partial_cmp(&b.cost).unwrap() }),
-            _ => {}
+            _ => self.models.sort_by(|a,b| if self.sort_desc { b.cost.partial_cmp(&a.cost).unwrap_or(std::cmp::Ordering::Equal) } else { a.cost.partial_cmp(&b.cost).unwrap_or(std::cmp::Ordering::Equal) }),
         }
     }
 }
+
+// ── Entry point ──
 
 pub fn run(db_path: PathBuf, home: PathBuf) -> anyhow::Result<()> {
     let storage = Storage::open(&db_path)?;
     let cc_db = home.join(".cc-switch").join("cc-switch.db");
     let pricing = PricingEngine::new(if cc_db.exists() { cc_db.to_str() } else { None });
-    let mut app = App::new(&storage, &pricing);
+    let mut app = App::load(&storage, &pricing);
 
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
-    let res = run_loop(&mut terminal, &mut app, &storage, &pricing);
+    let res = event_loop(&mut terminal, &mut app, &storage, &pricing);
     disable_raw_mode()?;
     execute!(terminal.backend_mut(), LeaveAlternateScreen, DisableMouseCapture)?;
     terminal.show_cursor()?;
     res
 }
 
-fn run_loop<B: Backend>(t: &mut Terminal<B>, app: &mut App, storage: &Storage, pricing: &PricingEngine) -> anyhow::Result<()> {
+fn event_loop<B: Backend>(t: &mut Terminal<B>, app: &mut App, storage: &Storage, pricing: &PricingEngine) -> anyhow::Result<()> {
     loop {
-        t.draw(|f| ui(f, app))?;
+        t.draw(|f| render(f, app))?;
         if event::poll(Duration::from_millis(200))? {
-            if let Event::Key(key) = event::read()? {
-                if key.kind == KeyEventKind::Release { continue; }
-                match key.code {
-                    KeyCode::Char('q') | KeyCode::Esc => return Ok(()),
-                    KeyCode::Char('1') => { app.tab=0; app.scroll=0; app.selected=0; }
-                    KeyCode::Char('2') => { app.tab=1; app.scroll=0; app.selected=0; }
-                    KeyCode::Char('3') => { app.tab=2; app.scroll=0; app.selected=0; }
-                    KeyCode::Char('4') => { app.tab=3; app.scroll=0; app.selected=0; }
-                    KeyCode::Char('5') => { app.tab=4; app.scroll=0; app.selected=0; }
-                    KeyCode::Tab => { app.tab = (app.tab + 1) % 5; app.scroll=0; app.selected=0; }
-                    KeyCode::Char('t') => { app.theme = (app.theme + 1) % THEME_COUNT; }
-                    KeyCode::Up|KeyCode::Char('k') => { if app.selected>0 {app.selected-=1; if app.selected<app.scroll {app.scroll=app.selected;}} }
-                    KeyCode::Down|KeyCode::Char('j') => { app.selected+=1; if app.selected>=app.scroll.saturating_add(20) {app.scroll=app.selected.saturating_sub(19);} }
-                    KeyCode::PageUp => { app.scroll=app.scroll.saturating_sub(10); app.selected=app.selected.saturating_sub(10); }
-                    KeyCode::PageDown => { app.scroll+=10; app.selected+=10; }
-                    KeyCode::Home => { app.scroll=0; app.selected=0; }
-                    KeyCode::End => { app.scroll=usize::MAX; app.selected=usize::MAX; }
-                    KeyCode::Char('s') if app.tab == 1 => { app.sort_col = (app.sort_col+1)%5; app.sort_desc = !app.sort_desc; app.sort_models(); }
-                    KeyCode::Char('r') => { app.reload(storage, pricing); app.last_refresh=Instant::now(); }
-                    _ => {}
+            let ev = event::read()?;
+            match ev {
+                Event::Key(key) if key.kind != KeyEventKind::Release => {
+                    if handle_key(app, key.code) { return Ok(()); }
                 }
+                Event::Mouse(m) => handle_mouse(app, m),
+                _ => {}
             }
         }
-        if app.last_refresh.elapsed().as_secs() >= REFRESH_SECS {
+        // Auto-refresh
+        if app.last_refresh.elapsed().as_secs() >= REFRESH_SECS && !app.background_loading {
             app.reload(storage, pricing);
             app.last_refresh = Instant::now();
         }
     }
 }
 
-fn theme_colors(theme: usize) -> (Color, Color, Color) {
-    match theme {
-        0 => (Color::Cyan, Color::Rgb(88,166,255), Color::Rgb(63,185,80)),   // blue
-        1 => (Color::Magenta, Color::Rgb(188,140,255), Color::Rgb(210,153,29)), // purple
-        2 => (Color::Green, Color::Rgb(63,185,80), Color::Rgb(88,166,255)),  // green
-        3 => (Color::Yellow, Color::Rgb(210,153,29), Color::Rgb(88,166,255)), // orange
-        _ => (Color::Red, Color::Rgb(248,81,73), Color::Rgb(88,166,255)),     // red
+fn handle_key(app: &mut App, key: KeyCode) -> bool {
+    match key {
+        KeyCode::Char('q') | KeyCode::Esc => return true,
+        KeyCode::Tab => { let tabs = Tab::all(); let idx = tabs.iter().position(|t| *t == app.tab).unwrap_or(0); app.tab = tabs[(idx + 1) % tabs.len()].clone(); app.scroll = 0; app.selected = 0; }
+        KeyCode::Char('1') => { app.tab = Tab::Overview; app.scroll = 0; app.selected = 0; }
+        KeyCode::Char('2') => { app.tab = Tab::Models; app.scroll = 0; app.selected = 0; }
+        KeyCode::Char('3') => { app.tab = Tab::Daily; app.scroll = 0; app.selected = 0; }
+        KeyCode::Char('4') => { app.tab = Tab::Stats; app.scroll = 0; app.selected = 0; }
+        KeyCode::Char('5') => { app.tab = Tab::Agents; app.scroll = 0; app.selected = 0; }
+        KeyCode::Char('6') => { app.tab = Tab::Sessions; app.scroll = 0; app.selected = 0; }
+        KeyCode::Char('t') => { app.theme = (app.theme + 1) % THEMES; }
+        KeyCode::Char('s') => { app.sort_col = (app.sort_col + 1) % 5; app.sort_desc = !app.sort_desc; app.sort(); }
+        KeyCode::Char('r') => { app.needs_reload = true; }
+        KeyCode::Up | KeyCode::Char('k') => { if app.selected > 0 { app.selected -= 1; if app.selected < app.scroll { app.scroll = app.selected; } } }
+        KeyCode::Down | KeyCode::Char('j') => { app.selected += 1; if app.selected >= app.scroll.saturating_add(20) { app.scroll = app.selected.saturating_sub(19); } }
+        KeyCode::PageUp => { app.scroll = app.scroll.saturating_sub(10); app.selected = app.selected.saturating_sub(10); }
+        KeyCode::PageDown => { app.scroll += 10; app.selected += 10; }
+        KeyCode::Home => { app.scroll = 0; app.selected = 0; }
+        KeyCode::End => { app.scroll = usize::MAX; app.selected = usize::MAX; }
+        _ => {}
+    }
+    false
+}
+
+fn handle_mouse(app: &mut App, m: crossterm::event::MouseEvent) {
+    match m.kind {
+        MouseEventKind::ScrollDown => { app.scroll += 3; app.selected += 3; }
+        MouseEventKind::ScrollUp => { app.scroll = app.scroll.saturating_sub(3); app.selected = app.selected.saturating_sub(3); }
+        _ => {}
     }
 }
 
-fn ui(f: &mut Frame, app: &mut App) {
+// ── Theme colors (Tokscale themes.rs pattern) ──
+
+fn theme(theme: usize) -> (Color, Color, Color, Color) {
+    match theme {
+        0 => (Color::Cyan, Color::Rgb(88,166,255), Color::Rgb(63,185,80), Color::Rgb(13,17,23)),     // blue
+        1 => (Color::Magenta, Color::Rgb(188,140,255), Color::Rgb(210,153,29), Color::Rgb(22,16,30)), // purple
+        2 => (Color::Green, Color::Rgb(63,185,80), Color::Rgb(88,166,255), Color::Rgb(13,23,17)),     // green
+        3 => (Color::Yellow, Color::Rgb(210,153,29), Color::Rgb(88,166,255), Color::Rgb(23,20,13)),   // orange
+        _ => (Color::Red, Color::Rgb(248,81,73), Color::Rgb(210,153,29), Color::Rgb(23,13,13)),       // red
+    }
+}
+
+// ── Main render (Tokscale ui/mod.rs pattern) ──
+
+fn render(f: &mut Frame, app: &mut App) {
     let area = f.area();
     let chunks = Layout::vertical([Constraint::Length(1), Constraint::Length(3), Constraint::Min(0), Constraint::Length(1)]).split(area);
-    let (accent, accent2, accent3) = theme_colors(app.theme);
+    let (accent, accent2, accent3, bg) = theme(app.theme);
 
-    // Header bar
-    let mut total_in: i64 = 0; let mut total_out: i64 = 0; let mut total_cr: i64 = 0;
-    for m in &app.models { total_in += m.input; total_out += m.output; total_cr += m.cache_read; }
-    let chr = if total_in + total_cr > 0 { total_cr as f64 / (total_in + total_cr) as f64 } else { 0.0 };
-
+    // Header
+    let chr = if app.total_input + app.total_cache_read > 0 { app.total_cache_read as f64 / (app.total_input + app.total_cache_read) as f64 } else { 0.0 };
     let hdr = Line::from(vec![
-        Span::styled(format!(" UsageMonitor "), Style::default().fg(Color::White).bold()),
-        Span::styled(format!("│ {} ", fmt(total_in+total_out)), Style::default().fg(accent2)),
+        Span::styled(" UsageMonitor ", Style::default().fg(Color::White).bold()),
+        Span::styled(format!("│ {} ", fmt(app.total_input + app.total_output)), Style::default().fg(accent2)),
         Span::styled(format!("${:.2} ", app.total_cost), Style::default().fg(accent3)),
-        Span::styled(format!("CHR {:.1}% ", chr*100.0), Style::default().fg(Color::Yellow)),
+        Span::styled(format!("CHR {:.1}% ", chr * 100.0), Style::default().fg(Color::Yellow)),
         Span::styled(format!("{} msgs ", fmt(app.msg_count)), Style::default().fg(Color::Gray)),
+        if app.background_loading { Span::styled("⏳", Style::default().fg(Color::Yellow)) } else { Span::styled("✓", Style::default().fg(Color::Green)) },
     ]);
-    f.render_widget(Paragraph::new(hdr).bg(Color::Rgb(13,17,23)), chunks[0]);
+    f.render_widget(Paragraph::new(hdr).bg(bg), chunks[0]);
 
     // Tabs
-    let tab_labels = vec![" Overview ", " Models ", " Daily ", " Stats ", " Sessions "];
-    let tabs = Tabs::new(tab_labels).select(app.tab)
+    let all_tabs = Tab::all();
+    let tabs: Vec<&str> = all_tabs.iter().map(|t| t.name()).collect();
+    let tab_idx = all_tabs.iter().position(|t| *t == app.tab).unwrap_or(0);
+    let tab_widget = Tabs::new(tabs).select(tab_idx)
         .style(Style::default().fg(Color::DarkGray))
         .highlight_style(Style::default().fg(Color::Black).bg(accent).bold());
-    f.render_widget(tabs, chunks[1]);
+    f.render_widget(tab_widget, chunks[1]);
 
     // Tab content
     match app.tab {
-        0 => tab_overview(f, chunks[2], app, accent, accent2, accent3),
-        1 => tab_models(f, chunks[2], app, accent),
-        2 => tab_daily(f, chunks[2], app, accent),
-        3 => tab_stats(f, chunks[2], app, accent),
-        4 => tab_sessions(f, chunks[2], app, accent),
-        _ => {}
+        Tab::Overview => tab_overview(f, chunks[2], app, accent, accent2, accent3),
+        Tab::Models => tab_models(f, chunks[2], app, accent),
+        Tab::Daily => tab_daily(f, chunks[2], app, accent),
+        Tab::Stats => tab_stats(f, chunks[2], app, accent),
+        Tab::Agents => tab_agents(f, chunks[2], app, accent),
+        Tab::Sessions => tab_sessions(f, chunks[2], app, accent),
     }
 
-    // Footer
+    // Footer (Tokscale footer.rs pattern)
     let ft = Line::from(vec![
-        Span::styled(" q:quit ", Style::default().fg(Color::DarkGray)),
-        Span::styled("1-5:tab ", Style::default().fg(Color::DarkGray)),
-        Span::styled("s:sort ", Style::default().fg(Color::DarkGray)),
-        Span::styled("t:theme ", Style::default().fg(Color::DarkGray)),
-        Span::styled("r:refresh ", Style::default().fg(Color::DarkGray)),
-        Span::styled(format!("{}s ", REFRESH_SECS), Style::default().fg(Color::DarkGray)),
+        Span::styled(" q ", Style::default().fg(Color::Black).bg(Color::Red)),
+        Span::styled(" quit  ", Style::default().fg(Color::DarkGray)),
+        Span::styled(" 1-6 ", Style::default().fg(Color::Black).bg(accent)),
+        Span::styled(" tabs  ", Style::default().fg(Color::DarkGray)),
+        Span::styled(" s ", Style::default().fg(Color::Black).bg(accent2)),
+        Span::styled(" sort  ", Style::default().fg(Color::DarkGray)),
+        Span::styled(" t ", Style::default().fg(Color::Black).bg(accent3)),
+        Span::styled(" theme  ", Style::default().fg(Color::DarkGray)),
+        Span::styled(" r ", Style::default().fg(Color::Black).bg(Color::Yellow)),
+        Span::styled(" refresh  ", Style::default().fg(Color::DarkGray)),
+        Span::styled(format!(" {}s auto ", REFRESH_SECS), Style::default().fg(Color::DarkGray)),
     ]);
-    f.render_widget(Paragraph::new(ft).bg(Color::Rgb(13,17,23)), chunks[3]);
+    f.render_widget(Paragraph::new(ft).bg(bg), chunks[3]);
 }
+
+// ── Tab renderers (Tokscale ui/*.rs patterns) ──
 
 fn tab_overview(f: &mut Frame, area: Rect, app: &App, accent: Color, accent2: Color, accent3: Color) {
     let rows = Layout::vertical([Constraint::Length(8), Constraint::Length(4), Constraint::Min(0)]).split(area);
 
-    // Cards
+    // KPI cards
     let cards = Layout::horizontal([Constraint::Ratio(1,4);4]).split(rows[0]);
-    let bk = Block::default().borders(Borders::ALL).border_style(Style::default().fg(Color::Rgb(48,54,61)));
-    let total_used: i64 = app.models.iter().map(|m| m.input + m.output + m.cache_write).sum();
-    let total_in: i64 = app.models.iter().map(|m| m.input).sum();
-    let total_cr: i64 = app.models.iter().map(|m| m.cache_read).sum();
-    let chr = if total_in + total_cr > 0 { total_cr as f64 / (total_in + total_cr) as f64 } else { 0.0 };
+    let total_used = app.total_input + app.total_output + app.models.iter().map(|m| m.cache_write).sum::<i64>();
+    let chr = if app.total_input + app.total_cache_read > 0 { app.total_cache_read as f64 / (app.total_input + app.total_cache_read) as f64 } else { 0.0 };
 
-    let t1 = fmt(total_used); let t2 = format!("${:.2}", app.total_cost);
-    let t3 = format!("{:.1}%", chr*100.0); let t4 = fmt(app.msg_count); let t4s = format!("{} models", app.models.len());
-    let card = |t: &str, v: &str, s: &str, c: Color| {
-        Paragraph::new(vec![
-            Line::from(Span::styled(t.to_string(), Style::default().fg(Color::Gray))),
-            Line::from(Span::styled(v.to_string(), Style::default().fg(c).bold())),
-            Line::from(Span::styled(s.to_string(), Style::default().fg(Color::DarkGray))),
-        ]).block(Block::default().borders(Borders::ALL).border_style(Style::default().fg(Color::Rgb(48,54,61))))
-    };
-    f.render_widget(card("Tokens", &t1, "total", Color::White), cards[0]);
-    f.render_widget(card("Cost", &t2, "estimated", accent3), cards[1]);
-    f.render_widget(card("Cache Hit", &t3, "read/total", Color::Yellow), cards[2]);
-    f.render_widget(card("Messages", &t4, &t4s, accent2), cards[3]);
+    let vals = [fmt(total_used), format!("${:.2}", app.total_cost), format!("{:.1}%", chr*100.0), fmt(app.msg_count)];
+    let subs = ["total tokens", "estimated", "cache hit rate", &format!("{} models", app.models.len())];
+    let colors = [Color::White, accent3, Color::Yellow, accent2];
+    for i in 0..4 {
+        let block = Block::default().borders(Borders::ALL).border_style(Style::default().fg(Color::Rgb(48,54,61)));
+        let p = Paragraph::new(vec![
+            Line::from(Span::styled(subs[i], Style::default().fg(Color::Gray))),
+            Line::from(Span::styled(vals[i].clone(), Style::default().fg(colors[i]).bold())),
+        ]).block(block);
+        f.render_widget(p, cards[i]);
+    }
 
-    // Token breakdown bar
-    let max_t = (total_in + app.models.iter().map(|m|m.output).sum::<i64>() + total_cr).max(1) as f64;
-    let out: i64 = app.models.iter().map(|m|m.output).sum();
-    let bar = Layout::horizontal([
-        Constraint::Ratio((total_in as f64 / max_t * 100.0) as u32, 100),
-        Constraint::Ratio((out as f64 / max_t * 100.0) as u32, 100),
-        Constraint::Ratio((total_cr as f64 / max_t * 100.0) as u32, 100),
+    // Token breakdown bar (stacked: input | output | cache)
+    let max_t = (app.total_input + app.total_output + app.total_cache_read).max(1) as f64;
+    let bars = Layout::horizontal([
+        Constraint::Ratio((app.total_input as f64 / max_t * 100.0) as u32, 100),
+        Constraint::Ratio((app.total_output as f64 / max_t * 100.0) as u32, 100),
+        Constraint::Ratio((app.total_cache_read as f64 / max_t * 100.0) as u32, 100),
     ]).split(rows[1]);
-    f.render_widget(Gauge::default().gauge_style(Style::default().fg(accent2).bg(accent2)).ratio(1.0).label("Input"), bar[0]);
-    f.render_widget(Gauge::default().gauge_style(Style::default().fg(Color::Magenta).bg(Color::Magenta)).ratio(1.0).label("Output"), bar[1]);
-    f.render_widget(Gauge::default().gauge_style(Style::default().fg(accent3).bg(accent3)).ratio(1.0).label("Cache"), bar[2]);
+    f.render_widget(Gauge::default().gauge_style(Style::default().fg(accent2).bg(accent2)).ratio(1.0).label("Input"), bars[0]);
+    f.render_widget(Gauge::default().gauge_style(Style::default().fg(Color::Magenta).bg(Color::Magenta)).ratio(1.0).label("Output"), bars[1]);
+    f.render_widget(Gauge::default().gauge_style(Style::default().fg(accent3).bg(accent3)).ratio(1.0).label("Cache Read"), bars[2]);
 
     // Top models
-    let model_rows: Vec<Row> = app.models.iter().take(12).map(|m| {
-        Row::new(vec![
-            Cell::from(m.model_id.as_str()),
-            Cell::from(fmt(m.input+m.output)).style(Style::default().fg(Color::White)),
-            Cell::from(fmt(m.cache_read)).style(Style::default().fg(accent3)),
-            Cell::from(format!("${:.2}", m.cost)).style(Style::default().fg(accent3)),
-        ])
-    }).collect();
+    let mrows: Vec<Row> = app.models.iter().take(14).map(|m| Row::new(vec![
+        Cell::from(m.model_id.as_str()),
+        Cell::from(fmt(m.input + m.output)).style(Style::default().fg(Color::White)),
+        Cell::from(fmt(m.cache_read)).style(Style::default().fg(accent3)),
+        Cell::from(format!("${:.2}", m.cost)).style(Style::default().fg(accent3)),
+    ])).collect();
     let w = [Constraint::Percentage(40), Constraint::Percentage(22), Constraint::Percentage(22), Constraint::Percentage(16)];
-    let tbl = Table::new(model_rows, w)
-        .header(Row::new(vec!["Model","Tokens","Cache","Cost"]).style(Style::default().fg(Color::DarkGray)))
-        .block(Block::default().borders(Borders::ALL).title("Top Models").border_style(Style::default().fg(Color::Rgb(48,54,61))));
-    f.render_widget(tbl, rows[2]);
+    f.render_widget(
+        Table::new(mrows, w).header(Row::new(vec!["Model","Tokens","Cache","Cost"]).style(Style::default().fg(Color::DarkGray)))
+            .block(Block::default().borders(Borders::ALL).title(" Top Models ").border_style(Style::default().fg(Color::Rgb(48,54,61)))),
+        rows[2],
+    );
 }
 
 fn tab_models(f: &mut Frame, area: Rect, app: &App, accent: Color) {
-    let headers = vec!["Model","Sessions","Input","Output","Cache","Cost"];
-    let hdr = Row::new(headers.iter().map(|h| Cell::from(*h).style(if app.sort_col == headers.iter().position(|x|*x==*h).unwrap_or(99) as u8 { Style::default().fg(accent).bold() } else { Style::default() })))
-        .style(Style::default().fg(Color::Cyan));
-    let rows: Vec<Row> = app.models.iter().skip(app.scroll).take(20).map(|m|
-        Row::new(vec![
-            Cell::from(m.model_id.as_str()),
-            Cell::from(format!("{}",m.sessions)), Cell::from(fmt(m.input)),
-            Cell::from(fmt(m.output)), Cell::from(fmt(m.cache_read)),
-            Cell::from(format!("${:.2}",m.cost)),
-        ])
-    ).collect();
-    let w = [Constraint::Percentage(32),Constraint::Percentage(10),Constraint::Percentage(16),Constraint::Percentage(16),Constraint::Percentage(16),Constraint::Percentage(10)];
-    let tbl = Table::new(rows, w).header(hdr)
-        .block(Block::default().borders(Borders::ALL).title(format!("Models ({}) s:sort", app.models.len())));
-    f.render_widget(tbl, area);
+    let cols = ["Model","Sessions","Tokens","Cache","Cost"];
+    let hdr = Row::new(cols.iter().enumerate().map(|(i,c)| Cell::from(*c).style(if i as u8 == app.sort_col { Style::default().fg(accent).bold() } else { Style::default() }))).style(Style::default().fg(Color::Cyan));
+    let rows: Vec<Row> = app.models.iter().skip(app.scroll).take(20).map(|m| Row::new(vec![
+        Cell::from(m.model_id.as_str()), Cell::from(format!("{}", m.sessions)),
+        Cell::from(fmt(m.input + m.output)), Cell::from(fmt(m.cache_read)),
+        Cell::from(format!("${:.2}", m.cost)),
+    ])).collect();
+    let w = [Constraint::Percentage(34),Constraint::Percentage(12),Constraint::Percentage(20),Constraint::Percentage(18),Constraint::Percentage(16)];
+    f.render_widget(Table::new(rows,w).header(hdr).block(Block::default().borders(Borders::ALL).title(format!(" Models ({}) s:sort ",app.models.len()))), area);
 }
 
 fn tab_daily(f: &mut Frame, area: Rect, app: &App, accent: Color) {
-    let rows: Vec<Row> = app.daily.iter().rev().skip(app.scroll).take(25).map(|d|
-        Row::new(vec![
-            Cell::from(d.date.as_str()), Cell::from(fmt(d.input)),
-            Cell::from(fmt(d.output)), Cell::from(fmt(d.cache_read)),
-            Cell::from(format!("{}",d.requests)),
-        ])
-    ).collect();
-    let w = [Constraint::Percentage(25),Constraint::Percentage(25),Constraint::Percentage(25),Constraint::Percentage(25),Constraint::Percentage(0)]; // fixed
-    let w2 = [Constraint::Percentage(20),Constraint::Percentage(20),Constraint::Percentage(20),Constraint::Percentage(20),Constraint::Percentage(20)];
-    let tbl = Table::new(rows, w2).header(Row::new(vec!["Date","Input","Output","Cache","Reqs"]).style(Style::default().fg(accent)))
-        .block(Block::default().borders(Borders::ALL).title(format!("Daily ({})", app.daily.len())));
-    f.render_widget(tbl, area);
+    let rows: Vec<Row> = app.daily.iter().rev().skip(app.scroll).take(22).map(|d| Row::new(vec![
+        Cell::from(d.date.as_str()).style(if d.date == chrono::Local::now().format("%Y-%m-%d").to_string() { Style::default().fg(Color::Yellow).bold() } else { Style::default() }),
+        Cell::from(fmt(d.input)), Cell::from(fmt(d.output)), Cell::from(fmt(d.cache_read)),
+        Cell::from(fmt(d.cache_write)), Cell::from(format!("{}", d.requests)),
+        Cell::from(format!("${:.4}", d.cost)),
+    ])).collect();
+    let w = [Constraint::Percentage(18),Constraint::Percentage(16),Constraint::Percentage(16),Constraint::Percentage(16),Constraint::Percentage(16),Constraint::Percentage(10),Constraint::Percentage(8)];
+    f.render_widget(Table::new(rows,w).header(Row::new(vec!["Date","Input","Output","Cache R","Cache W","Reqs","Cost"]).style(Style::default().fg(accent)))
+        .block(Block::default().borders(Borders::ALL).title(format!(" Daily ({}) ",app.daily.len()))), area);
 }
 
 fn tab_stats(f: &mut Frame, area: Rect, app: &App, accent: Color) {
     let chunks = Layout::vertical([Constraint::Length(8), Constraint::Min(0)]).split(area);
+    let cards = Layout::horizontal([Constraint::Ratio(1,4);4]).split(chunks[0]);
 
-    // Streak stats
-    let streak_cards = Layout::horizontal([Constraint::Ratio(1,4);4]).split(chunks[0]);
-    let mut sorted_dates: Vec<_> = app.heatmap.iter().map(|(d,_)| d.clone()).collect();
-    sorted_dates.sort(); sorted_dates.dedup();
+    // Streaks
+    let mut dates: Vec<String> = app.heatmap.iter().map(|(d,_)| d.clone()).collect();
+    dates.sort(); dates.dedup();
     let today = chrono::Local::now().format("%Y-%m-%d").to_string();
-    let current_streak = calc_streak(&sorted_dates, &today);
-    let longest_streak = calc_longest(&sorted_dates);
-    let active_days = sorted_dates.len();
-    let total_days = if let (Some(first), Some(last)) = (sorted_dates.first(), sorted_dates.last()) {
-        let f = chrono::NaiveDate::parse_from_str(first, "%Y-%m-%d").unwrap();
-        let l = chrono::NaiveDate::parse_from_str(last, "%Y-%m-%d").unwrap();
-        (l - f).num_days() as usize + 1
-    } else { 1 };
+    let streak = calc_streak(&dates, &today);
+    let longest = calc_longest(&dates);
+    let active = dates.len();
+    let total_days = if let (Some(f),Some(l)) = (dates.first(),dates.last()) {
+        (chrono::NaiveDate::parse_from_str(l,"%Y-%m-%d").unwrap() - chrono::NaiveDate::parse_from_str(f,"%Y-%m-%d").unwrap()).num_days() as usize + 1
+    } else {1};
 
-    let s1 = format!("{} days", current_streak); let s2 = format!("{} days", longest_streak);
-    let s3 = format!("{} / {}", active_days, total_days); let s4 = format!("${:.2}", app.total_cost);
-    let sc = |t: &str, v: &str, c: Color| {
-        Paragraph::new(vec![
-            Line::from(Span::styled(t.to_string(), Style::default().fg(Color::Gray))),
-            Line::from(Span::styled(v.to_string(), Style::default().fg(c).bold())),
-        ]).block(Block::default().borders(Borders::ALL).border_style(Style::default().fg(Color::Rgb(48,54,61))))
-    };
-    f.render_widget(sc("Current Streak", &s1, accent), streak_cards[0]);
-    f.render_widget(sc("Longest Streak", &s2, Color::Yellow), streak_cards[1]);
-    f.render_widget(sc("Active Days", &s3, Color::White), streak_cards[2]);
-    f.render_widget(sc("Total Cost", &s4, Color::LightGreen), streak_cards[3]);
+    let svals = [format!("{} days",streak),format!("{} days",longest),format!("{}/{}",active,total_days),format!("${:.2}",app.total_cost)];
+    let slabs = ["Current Streak","Longest Streak","Active Days","Total Cost"];
+    let scols = [accent,Color::Yellow,Color::White,Color::LightGreen];
+    for i in 0..4 {
+        let block = Block::default().borders(Borders::ALL).border_style(Style::default().fg(Color::Rgb(48,54,61)));
+        f.render_widget(Paragraph::new(vec![
+            Line::from(Span::styled(slabs[i],Style::default().fg(Color::Gray))),
+            Line::from(Span::styled(svals[i].clone(),Style::default().fg(scols[i]).bold())),
+        ]).block(block), cards[i]);
+    }
 
-    // Heatmap (simplified text grid)
+    // Text heatmap
     if !app.heatmap.is_empty() {
-        let mut by_date: HashMap<String, i64> = app.heatmap.iter().cloned().collect();
+        let by_date: HashMap<String,i64> = app.heatmap.iter().cloned().collect();
         let max_v = by_date.values().max().copied().unwrap_or(1).max(1);
-        let cols = 26;
-        let end = chrono::Local::now().date_naive();
+        let cols = 26; let end = chrono::Local::now().date_naive();
         let start = end - chrono::Duration::days(cols * 7 - 1);
-
-        let mut lines: Vec<Line> = vec![];
+        let mut lines = vec![];
         for row in 0..7 {
-            let mut spans = vec![];
+            let mut spans = vec![Span::styled(format!("{:2} ", if row%2==0 {""} else {""}), Style::default().fg(Color::DarkGray))];
             for col in 0..cols {
-                let d = start + chrono::Duration::days((col * 7 + row) as i64);
-                let ds = d.format("%Y-%m-%d").to_string();
+                let ds = (start + chrono::Duration::days((col*7+row) as i64)).format("%Y-%m-%d").to_string();
                 let v = by_date.get(&ds).copied().unwrap_or(0);
-                let ch = if v == 0 { '·' } else if v < max_v / 3 { '░' } else if v < max_v * 2 / 3 { '▒' } else { '▓' };
-                let c = if v == 0 { Color::Rgb(22,27,34) } else if v < max_v / 3 { Color::Rgb(14,68,41) } else if v < max_v * 2 / 3 { Color::Rgb(0,109,50) } else { Color::Rgb(57,211,83) };
-                spans.push(Span::styled(format!("{} ", ch), Style::default().fg(c)));
+                let (ch, c) = if v == 0 { ('·', Color::Rgb(22,27,34)) }
+                else if v < max_v/3 { ('░', Color::Rgb(14,68,41)) }
+                else if v < max_v*2/3 { ('▒', Color::Rgb(0,109,50)) }
+                else { ('▓', Color::Rgb(57,211,83)) };
+                spans.push(Span::styled(format!("{} ",ch), Style::default().fg(c)));
             }
             lines.push(Line::from(spans));
         }
-        let p = Paragraph::new(lines).block(Block::default().borders(Borders::ALL).title("Contribution Heatmap"));
-        f.render_widget(p, chunks[1]);
+        f.render_widget(Paragraph::new(lines).block(Block::default().borders(Borders::ALL).title(" Contribution Heatmap ")), chunks[1]);
     }
 }
 
-fn tab_sessions(f: &mut Frame, area: Rect, app: &App, accent: Color) {
-    let rows: Vec<Row> = app.sessions.iter().skip(app.scroll).take(20).map(|s|
-        Row::new(vec![
-            Cell::from(format!("{}…", &s.session_id[..8.min(s.session_id.len())])).style(Style::default().fg(accent)),
-            Cell::from(s.client.as_str()), Cell::from(s.model_id.as_str()),
-            Cell::from(fmt(s.tokens)), Cell::from(fmt(s.messages as i64)),
-            Cell::from(format!("${:.2}",s.cost)),
-        ])
-    ).collect();
-    let w = [Constraint::Percentage(20),Constraint::Percentage(12),Constraint::Percentage(28),Constraint::Percentage(18),Constraint::Percentage(10),Constraint::Percentage(12)];
-    let tbl = Table::new(rows, w).header(Row::new(vec!["Session","Client","Model","Tokens","Msgs","Cost"]).style(Style::default().fg(accent)))
-        .block(Block::default().borders(Borders::ALL).title(format!("Sessions ({})", app.sessions.len())));
-    f.render_widget(tbl, area);
+fn tab_agents(f: &mut Frame, area: Rect, app: &App, accent: Color) {
+    let rows: Vec<Row> = app.agents.iter().skip(app.scroll).take(20).map(|a| Row::new(vec![
+        Cell::from(a.client.as_str()), Cell::from(a.name.as_str()),
+        Cell::from(fmt(a.tokens)), Cell::from(format!("${:.2}",a.cost)),
+        Cell::from(fmt(a.messages)),
+    ])).collect();
+    let w = [Constraint::Percentage(20),Constraint::Percentage(30),Constraint::Percentage(20),Constraint::Percentage(15),Constraint::Percentage(15)];
+    f.render_widget(Table::new(rows,w).header(Row::new(vec!["Client","Model","Tokens","Cost","Msgs"]).style(Style::default().fg(accent)))
+        .block(Block::default().borders(Borders::ALL).title(format!(" Agents ({}) ",app.agents.len()))), area);
 }
 
+fn tab_sessions(f: &mut Frame, area: Rect, app: &App, accent: Color) {
+    let rows: Vec<Row> = app.sessions.iter().skip(app.scroll).take(20).map(|s| Row::new(vec![
+        Cell::from(format!("{}…",&s.session_id[..8.min(s.session_id.len())])).style(Style::default().fg(accent)),
+        Cell::from(s.client.as_str()), Cell::from(s.model_id.as_str()),
+        Cell::from(fmt(s.tokens)), Cell::from(fmt(s.messages as i64)),
+        Cell::from(format!("${:.2}",s.cost)),
+    ])).collect();
+    let w = [Constraint::Percentage(20),Constraint::Percentage(12),Constraint::Percentage(28),Constraint::Percentage(18),Constraint::Percentage(10),Constraint::Percentage(12)];
+    f.render_widget(Table::new(rows,w).header(Row::new(vec!["Session","Client","Model","Tokens","Msgs","Cost"]).style(Style::default().fg(accent)))
+        .block(Block::default().borders(Borders::ALL).title(format!(" Sessions ({}) ",app.sessions.len()))), area);
+}
+
+// ── Helpers ──
+
 fn calc_streak(dates: &[String], today: &str) -> usize {
-    let mut set: Vec<_> = dates.iter().collect();
-    set.sort(); set.dedup();
     let mut streak = 0;
     let mut d = chrono::NaiveDate::parse_from_str(today, "%Y-%m-%d").unwrap();
     loop {
-        if set.contains(&&d.format("%Y-%m-%d").to_string()) { streak += 1; } else { break; }
-        d = d - chrono::Duration::days(1);
+        let ds = d.format("%Y-%m-%d").to_string();
+        if dates.contains(&ds) { streak += 1; d -= chrono::Duration::days(1); } else { break; }
     }
     streak
 }
 
 fn calc_longest(dates: &[String]) -> usize {
-    let mut set: Vec<_> = dates.iter().collect();
-    set.sort(); set.dedup();
-    let mut longest = 0; let mut cur = 0;
-    let mut prev: Option<chrono::NaiveDate> = None;
-    for ds in &set {
-        let d = chrono::NaiveDate::parse_from_str(ds, "%Y-%m-%d").unwrap();
+    let mut sorted: Vec<chrono::NaiveDate> = dates.iter().filter_map(|d| chrono::NaiveDate::parse_from_str(d, "%Y-%m-%d").ok()).collect();
+    sorted.sort(); sorted.dedup();
+    let mut longest = 0; let mut cur = 0; let mut prev: Option<chrono::NaiveDate> = None;
+    for d in sorted {
         if let Some(p) = prev {
             if d == p + chrono::Duration::days(1) { cur += 1; } else { cur = 1; }
         } else { cur = 1; }
-        longest = longest.max(cur);
-        prev = Some(d);
+        longest = longest.max(cur); prev = Some(d);
     }
     longest
 }
