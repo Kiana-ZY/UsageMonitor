@@ -32,12 +32,14 @@ pub struct TokenBreakdown {
 }
 
 impl TokenBreakdown {
-    /// Total tokens consumed.
-    ///
-    /// `cache_read` is excluded because it represents tokens that were
-    /// *avoided*, not consumed. `cache_write` is included because it
-    /// represents tokens actually processed for cache insertion.
+    /// Total tokens processed (matching provider dashboard totals).
+    /// Includes cache_read — providers count cached tokens in their total.
     pub fn total_tokens(&self) -> i64 {
+        self.input + self.output + self.cache_read + self.cache_write + self.reasoning
+    }
+
+    /// Billable tokens — excludes cache_read (tokens served from cache, not billed as input).
+    pub fn billable_tokens(&self) -> i64 {
         self.input + self.output + self.cache_write + self.reasoning
     }
 
@@ -469,7 +471,7 @@ mod tests {
             cache_write: 100,
             reasoning: 0,
         };
-        assert_eq!(tb.total_tokens(), 1600); // 1000+500+100+0
+        assert_eq!(tb.total_tokens(), 1800); // 1000+500+200+100+0
     }
 
     #[test]
@@ -481,7 +483,7 @@ mod tests {
             cache_write: 50,
             reasoning: 30,
         };
-        assert_eq!(tb.total_tokens(), 380); // 100+200+50+30
+        assert_eq!(tb.total_tokens(), 10379); // 100+200+9999+50+30
     }
 
     #[test]
