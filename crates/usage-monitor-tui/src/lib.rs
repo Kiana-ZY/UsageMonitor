@@ -214,13 +214,23 @@ fn event_loop<B: Backend>(t: &mut Terminal<B>, app: &mut App, storage: &Storage,
 fn handle_key(app: &mut App, key: KeyCode) -> bool {
     match key {
         KeyCode::Char('q') | KeyCode::Esc => return true,
-        KeyCode::Char('1')|KeyCode::Char('2')|KeyCode::Char('3')|KeyCode::Char('4')|KeyCode::Char('5')|KeyCode::Char('6') => {
-            let idx = match key { KeyCode::Char(c) => (c as u8 - b'1') as usize, _ => 0 };
-            app.tab = idx.min(5); app.scroll = 0; app.selected = 0;
+        // Tab switching: number keys, arrows, tab, h/l
+        KeyCode::Char('1') => { app.tab = 0; app.scroll = 0; app.selected = 0; }
+        KeyCode::Char('2') => { app.tab = 1; app.scroll = 0; app.selected = 0; }
+        KeyCode::Char('3') => { app.tab = 2; app.scroll = 0; app.selected = 0; }
+        KeyCode::Char('4') => { app.tab = 3; app.scroll = 0; app.selected = 0; }
+        KeyCode::Right | KeyCode::Char('l') => {
+            app.tab = (app.tab + 1) % 4; app.scroll = 0; app.selected = 0;
         }
-        KeyCode::Tab => { app.tab = (app.tab + 1) % 4; app.scroll = 0; app.selected = 0; }
+        KeyCode::Left | KeyCode::Char('h') => {
+            app.tab = if app.tab == 0 { 3 } else { app.tab - 1 }; app.scroll = 0; app.selected = 0;
+        }
+        KeyCode::Tab => {
+            app.tab = (app.tab + 1) % 4; app.scroll = 0; app.selected = 0;
+        }
         KeyCode::Char('s') => { app.sort_col = (app.sort_col + 1) % 5; app.sort_desc = !app.sort_desc; app.sort(); }
         KeyCode::Char('r') => { app.last_refresh = Instant::now() - Duration::from_secs(REFRESH_SECS); }
+        // Scroll / select
         KeyCode::Up|KeyCode::Char('k') => { app.selected = app.selected.saturating_sub(1); app.scroll_to(); }
         KeyCode::Down|KeyCode::Char('j') => { app.selected += 1; app.scroll_to(); }
         KeyCode::PageUp => { app.scroll = app.scroll.saturating_sub(10); app.selected = app.selected.saturating_sub(10); }
@@ -272,10 +282,14 @@ fn render(f: &mut Frame, app: &mut App) {
 
     // Footer
     let ft = Line::from(vec![
-        Span::styled(" q quit ", Style::default().fg(Color::DarkGray)),
-        Span::styled(" 1-4 tabs ", Style::default().fg(Color::DarkGray)),
-        Span::styled(" s sort ", Style::default().fg(Color::DarkGray)),
-        Span::styled(" r refresh ", Style::default().fg(Color::DarkGray)),
+        Span::styled(" q ", Style::default().fg(Color::Black).bg(Color::Red)),
+        Span::styled(" quit  ", Style::default().fg(Color::DarkGray)),
+        Span::styled(" ←→/h/l/1-4 ", Style::default().fg(Color::Black).bg(Color::Cyan)),
+        Span::styled(" tabs  ", Style::default().fg(Color::DarkGray)),
+        Span::styled(" ↑↓/j/k ", Style::default().fg(Color::Black).bg(Color::Green)),
+        Span::styled(" nav  ", Style::default().fg(Color::DarkGray)),
+        Span::styled(" s ", Style::default().fg(Color::Black).bg(Color::Yellow)),
+        Span::styled(" sort  ", Style::default().fg(Color::DarkGray)),
         Span::styled(format!(" {}s ", REFRESH_SECS), Style::default().fg(Color::DarkGray)),
     ]);
     f.render_widget(ratatui::widgets::Paragraph::new(ft).bg(bg), chunks[3]);
