@@ -57,16 +57,34 @@ pub async fn serve(db_path: PathBuf, home: PathBuf, start_port: u16) -> anyhow::
         home,
     };
 
-    let app = Router::new()
-        .route("/", get(index_page))
-        .route("/api/summary", get(api_summary))
-        .route("/api/models", get(api_models))
-        .route("/api/sessions", get(api_sessions))
-        .route("/api/daily", get(api_daily))
-        .route("/api/heatmap", get(api_heatmap))
-        .route("/api/scan", post(api_scan))
-        .layer(CorsLayer::permissive())
-        .with_state(state);
+    // Serve React build from web/dist/ if available, otherwise embedded HTML
+    let static_dir = std::path::Path::new("web/dist");
+    let app = if static_dir.exists() {
+        Router::new()
+            .route("/api/summary", get(api_summary))
+            .route("/api/models", get(api_models))
+            .route("/api/sessions", get(api_sessions))
+            .route("/api/daily", get(api_daily))
+            .route("/api/heatmap", get(api_heatmap))
+            .route("/api/scan", post(api_scan))
+            .fallback_service(
+                tower_http::services::ServeDir::new(static_dir)
+                    .fallback(tower_http::services::ServeFile::new(static_dir.join("index.html")))
+            )
+            .layer(CorsLayer::permissive())
+            .with_state(state)
+    } else {
+        Router::new()
+            .route("/", get(index_page))
+            .route("/api/summary", get(api_summary))
+            .route("/api/models", get(api_models))
+            .route("/api/sessions", get(api_sessions))
+            .route("/api/daily", get(api_daily))
+            .route("/api/heatmap", get(api_heatmap))
+            .route("/api/scan", post(api_scan))
+            .layer(CorsLayer::permissive())
+            .with_state(state)
+    };
 
     // Try ports from start_port upwards
     let listener = bind_port(start_port).await?;
