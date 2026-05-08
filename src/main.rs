@@ -102,9 +102,10 @@ fn main() -> Result<()> {
             let claude_dir = home.join(".claude").join("projects");
             let mut all_messages = Vec::new();
 
-            // CC Switch data source
+            // CC Switch data source (covers Claude Code + Codex)
             let cc_switch = CcSwitchAdapter::new(CcSwitchAdapter::default_path());
-            if cc_switch.enabled() {
+            let has_cc = cc_switch.enabled();
+            if has_cc {
                 println!("CC Switch DB found — collecting proxy data...");
                 match cc_switch.collect() {
                     Ok(cc_msgs) => {
@@ -115,10 +116,10 @@ fn main() -> Result<()> {
                 }
             }
 
-            // Native parsers
+            // Native parsers — skip Claude/Codex if CC Switch covers them
             let native = parsers::parse_all(
-                if claude_dir.exists() { Some(claude_dir.as_path()) } else { None },
-                None, // codex
+                if has_cc { None } else { if claude_dir.exists() { Some(claude_dir.as_path()) } else { None } },
+                if has_cc { None } else { None }, // codex (skip when CC Switch covers it)
                 None, // kimi
                 None, // gemini
                 None, // pi
